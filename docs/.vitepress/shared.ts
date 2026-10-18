@@ -12,14 +12,20 @@ export const shared = defineConfig({
     ['meta', { name: 'theme-color', content: '#0b0f19' }],
     ['meta', { property: 'og:type', content: 'website' }],
     ['meta', { property: 'og:locale', content: 'zh_CN' }],
-    ['meta', { property: 'og:title', content: 'JSHookMCP | JavaScript 逆向与自动化' }],
+    [
+      'meta',
+      {
+        property: 'og:title',
+        content: 'JSHookMCP | 检索优先跨域逆向工程与运行时分析工作区 (735 工具, 36 能力域)',
+      },
+    ],
     ['meta', { property: 'og:site_name', content: 'JSHookMCP' }],
     [
       'meta',
       {
         property: 'og:description',
         content:
-          '面向 JavaScript 逆向、浏览器自动化、网络采集与扩展开发的 MCP server 文档站：600+ 工具，36 个能力域。',
+          '面向 AI Agent（Claude Code、Cursor、Claude Desktop）的检索优先跨域逆向工程 MCP server：735 个工具、36 个能力域，全链路因果证据图（网络到本地 JNI/Syscall）、Unicorn JNI 无头仿真与 3K Token 检索梯队。',
       },
     ],
     ['meta', { property: 'og:image', content: 'https://vmoranv.github.io/jshookmcp/favicon.png' }],
@@ -35,10 +41,11 @@ export const shared = defineConfig({
             '@id': 'https://vmoranv.github.io/jshookmcp/#website',
             url: 'https://vmoranv.github.io/jshookmcp/',
             name: 'JSHookMCP',
-            description: '面向 JavaScript 逆向、浏览器自动化、网络采集与扩展开发的 MCP 文档站。',
+            description:
+              '面向 AI Agent 的检索优先跨域逆向工程与运行时分析工作区（735 工具，36 能力域）。',
             inLanguage: ['zh-CN', 'en'],
             publisher: { '@id': 'https://vmoranv.github.io/jshookmcp/#org' },
-            dateModified: '2026-10-03',
+            dateModified: '2026-10-18',
             potentialAction: {
               '@type': 'SearchAction',
               target: 'https://vmoranv.github.io/jshookmcp/?q={search_term_string}',
@@ -51,7 +58,11 @@ export const shared = defineConfig({
             name: 'vmoranv',
             url: 'https://vmoranv.github.io/jshookmcp/',
             logo: 'https://vmoranv.github.io/jshookmcp/logo.svg',
-            sameAs: ['https://github.com/vmoranv/jshookmcp', 'https://github.com/vmoranv'],
+            sameAs: [
+              'https://github.com/vmoranv/jshookmcp',
+              'https://github.com/vmoranv',
+              'https://glama.ai/mcp/servers/vmoranv/jshookmcp',
+            ],
             address: {
               '@type': 'PostalAddress',
               addressCountry: 'CN',
@@ -77,9 +88,21 @@ export const shared = defineConfig({
             name: 'JSHookMCP',
             url: 'https://vmoranv.github.io/jshookmcp/',
             description:
-              'TypeScript MCP server：浏览器自动化、CDP 调试、网络抓包、JS hook 与反混淆、跨平台 native FFI、工作流编排。npm 包名 @jshookmcp/jshook，AGPL-3.0。',
-            applicationCategory: 'DeveloperApplication',
+              'Search-First Agentic Cross-Domain Reverse Engineering Workspace for AI agents (npm: @jshookmcp/jshook, AGPL-3.0). 735 tools across 36 domains unifying network, DOM, V8/WASM, native memory, Unicorn JNI emulation, and kernel syscalls with a 3K-token profile ladder.',
+            applicationCategory: 'DeveloperApplication, ReverseEngineeringTool',
             operatingSystem: 'Windows, macOS, Linux',
+            softwareVersion: '0.4.2',
+            featureList: [
+              'Search-First 3K-Token Profile Ladder (BM25 + ONNX micro-embeddings + RRF)',
+              'Cross-Domain Causal Evidence Graph (Network <-> DOM <-> V8/WASM <-> Native Memory <-> Unicorn JNI <-> Syscalls)',
+              'Headless Android Native JNI Emulation without devices (nemu / Unicorn)',
+              'Flutter & Dart AOT Snapshot Runtime Introspection (dart-inspector)',
+              'Chromium Mojo IPC Sniffing & Mocking (mojo-ipc)',
+              'Low-level In-Memory Forensics (AOB scanning, pointer maps, vtables, code caves)',
+              'Dynamic Binary Instrumentation (Frida, Ghidra, IDA, JADX bridges)',
+              'Full-stack Network Interception (HTTP/2, gRPC, Protobuf, TLS NSS keylog)',
+              'Stealth Browser Automation & Fingerprint Evasion (Chromium/Camoufox CDP)',
+            ],
             offers: {
               '@type': 'Offer',
               price: '0',
@@ -96,9 +119,9 @@ export const shared = defineConfig({
           {
             '@type': 'TechArticle',
             '@id': 'https://vmoranv.github.io/jshookmcp/#article',
-            headline: 'JSHookMCP：面向 AI agent 的 JavaScript 逆向与自动化 MCP server',
+            headline: 'JSHookMCP：面向 AI Agent 的检索优先跨域逆向工程与运行时分析工作区',
             description:
-              'JSHookMCP 是一个 TypeScript 实现的 MCP server，提供 600+ 工具、36 个能力域，覆盖浏览器自动化、CDP 调试、网络抓包、JS hook 与跨平台 native FFI。',
+              'JSHookMCP 是一个专为 AI Agent 设计的开源 MCP server，提供 735 个工具与 36 个能力域。通过独创的 3K Token 检索梯队与跨域因果证据图，实现从网络数据包、DOM、V8/WASM 到原生内存、Unicorn JNI 仿真与内核系统调用的闭环动态分析。',
             url: 'https://vmoranv.github.io/jshookmcp/',
             image: 'https://vmoranv.github.io/jshookmcp/logo.svg',
             author: {
@@ -109,9 +132,9 @@ export const shared = defineConfig({
             },
             publisher: { '@id': 'https://vmoranv.github.io/jshookmcp/#org' },
             datePublished: '2025-01-01',
-            dateModified: '2026-10-03',
+            dateModified: '2026-10-18',
             keywords:
-              'JavaScript reverse engineering, MCP, browser automation, CDP, network capture, deobfuscation, native FFI',
+              'MCP, Model Context Protocol, Reverse Engineering, AI Agent, Claude Code, Cursor, Unicorn JNI, Frida, Cross-Domain Evidence Graph, Flutter Dart, V8 Turbofan, WASM, Mojo IPC, AOB Scan, Dynamic Analysis',
           },
           {
             '@type': 'FAQPage',
@@ -122,7 +145,15 @@ export const shared = defineConfig({
                 name: '支持哪些 MCP 客户端？',
                 acceptedAnswer: {
                   '@type': 'Answer',
-                  text: '任何标准 MCP 客户端（Claude Desktop、Cursor、Claude Code 等），通过 stdio 或 Streamable HTTP 接入。',
+                  text: '任何标准 MCP 客户端（Claude Desktop、Cursor、Claude Code、Windsurf、Antigravity 等），通过 stdio 或 Streamable HTTP 接入。只需一行 npx -y @jshookmcp/jshook 即可使用。',
+                },
+              },
+              {
+                '@type': 'Question',
+                name: 'JSHookMCP 的核心技术差异点是什么？',
+                acceptedAnswer: {
+                  '@type': 'Answer',
+                  text: 'JSHookMCP 具备六大核心技术优势：(1) 检索优先 3K-Token 梯队架构（解决 735 个工具挤爆上下文问题）；(2) 跨域全链路因果证据图（从网络数据包穿透至原生 JNI 与 Syscall）；(3) 无设备 Unicorn Android JNI 无头仿真；(4) Flutter/Dart AOT 快照运行时内省；(5) Chromium Mojo IPC 嗅探与 Mock；(6) Cheat Engine 级别的底层内存扫描与取证。',
                 },
               },
               {
@@ -130,15 +161,15 @@ export const shared = defineConfig({
                 name: '36 个能力域是什么？',
                 acceptedAnswer: {
                   '@type': 'Answer',
-                  text: '按职责划分的工具集合（如 browser、network、debugger、v8-inspector、native-ffi 等），运行时按 profile 分层加载，其余域懒激活。',
+                  text: '涵盖 cross-domain、native-emulator、dart-inspector、mojo-ipc、memory、v8-inspector、wasm、binary-instrument、browser、network、tls-inspector、syscall-hook 等 36 个按职责划分的工具域，共 735 个工具。',
                 },
               },
               {
                 '@type': 'Question',
-                name: '平台支持？',
+                name: '跨平台底层支持如何实现？',
                 acceptedAnswer: {
                   '@type': 'Answer',
-                  text: 'Windows（Win32 API）、macOS（Mach trap）、Linux（POSIX syscall），基于 koffi 的跨平台 FFI。',
+                  text: 'Windows（Win32 API/VEH/PE 取证）、macOS（Mach trap 端口与反汇编）、Linux（POSIX syscall/eBPF），全部基于高效的跨平台 FFI 架构无缝支持。',
                 },
               },
             ],

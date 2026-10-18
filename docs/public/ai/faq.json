@@ -1,18 +1,34 @@
 [
   {
     "question": "Which MCP clients are supported?",
-    "answer": "Any standard MCP client (Claude Desktop, Cursor, Claude Code, etc.), via stdio or Streamable HTTP. You only need to add one JSON snippet to your client config."
+    "answer": "Any standard MCP client (Claude Desktop, Cursor, Claude Code, Windsurf, Cline, Antigravity, etc.) via stdio or Streamable HTTP. Simply add the npx configuration snippet to your client config."
   },
   {
-    "question": "What are the 36 capability domains?",
-    "answer": "Domains group tools by responsibility: browser, network, debugger, v8-inspector, native-emulator, workflow, extension-sdk, and more. They load by profile (search / workflow / full); the rest activate lazily at runtime."
+    "question": "What makes JSHookMCP different from standard browser automation MCPs (like Puppeteer or Playwright)?",
+    "answer": "Standard browser MCPs only perform high-level DOM interactions (clicking, typing, screenshots). JSHookMCP is a comprehensive agentic reverse-engineering workspace that bridges the entire execution stack: from HTTP/2 and gRPC network protocols, through V8 Turbofan JIT compiler internals and WASM VMs, down to native memory, Frida dynamic instrumentation, headless Unicorn Android JNI emulation, and kernel syscalls."
   },
   {
-    "question": "Which platforms does native FFI cover?",
-    "answer": "Windows (Win32 API), macOS (Mach trap), and Linux (POSIX syscall), all through a cross-platform koffi FFI layer."
+    "question": "How does JSHookMCP solve the LLM token context bloat problem with 735 tools?",
+    "answer": "Rather than flooding the LLM context with ~40K-60K tokens of tool schemas, JSHookMCP uses a Search-First 3K-Token Profile Ladder. Startup exposes only ~3K tokens of meta-discovery tools. A hybrid local engine (BM25 + ONNX BGE-micro-v2 embeddings + Reciprocal Rank Fusion + Reinforcement FeedbackTracker) routes agent intent and activates specific tools or domains dynamically on demand."
   },
   {
-    "question": "How do I install JSHookMCP?",
-    "answer": "Run it with npx -y @jshookmcp/jshook, no local install required. Add the npx command under mcpServers in your MCP client configuration."
+    "question": "What is the Cross-Domain Causal Evidence Graph?",
+    "answer": "The cross-domain engine correlates telemetry across 7 execution tiers: Network <-> DOM <-> JS AST & Turbofan <-> WASM <-> Native Memory <-> Unicorn JNI <-> Syscalls. It allows an AI agent to build an end-to-end causal chain explaining how a user event or network request is computed through complex, multi-tiered obfuscated logic."
+  },
+  {
+    "question": "Can JSHookMCP execute Android native JNI code without an emulator or phone?",
+    "answer": "Yes. Via the native-emulator (nemu) domain powered by Unicorn, JSHookMCP loads and runs ARM/ARM64 Android .so dynamic libraries directly in-process. It automatically mocks the Java JNI environment (FindClass, GetMethodID, CallObjectMethod, NewByteArray) to execute JNI export functions without requiring an Android device, ADB, or emulator."
+  },
+  {
+    "question": "How does JSHookMCP reverse engineer Flutter and Dart applications?",
+    "answer": "Through the dart-inspector domain, JSHookMCP parses Dart AOT snapshot headers, dumps object pools, scans SMI (Small Integers), maps PC descriptors, and reconstructs function call graphs directly from compiled Flutter binaries."
+  },
+  {
+    "question": "What operating systems are supported?",
+    "answer": "macOS (Mach traps and Apple Silicon/Intel support), Windows (Win32 API, VEH debugging, PE introspection), and Linux (POSIX syscalls and eBPF tracing) through a unified cross-platform FFI architecture."
+  },
+  {
+    "question": "How do I install and run JSHookMCP?",
+    "answer": "Run it with 'npx -y @jshookmcp/jshook' with zero local installation needed. You can configure it in your MCP client under mcpServers."
   }
 ]

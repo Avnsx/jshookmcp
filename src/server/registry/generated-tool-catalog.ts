@@ -10136,7 +10136,8 @@ export const GENERATED_TOOL_CATALOG = [
   {
     tool: {
       name: 'ghidra_bridge',
-      description: 'Send a command to a Ghidra headless analysis bridge.',
+      description:
+        'Send a command to a Ghidra bridge. Two backends: the pip ghidra_bridge server (TCP 127.0.0.1:4768 — pip install ghidra_bridge, then in Ghidra run ghidra_bridge_server.py) or a REST bridge (HTTP 18080). Auto mode prefers the pip TCP server when it answers.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -10153,6 +10154,12 @@ export const GENERATED_TOOL_CATALOG = [
               'get_segments',
             ],
             description: 'Action to perform',
+          },
+          backend: {
+            type: 'string',
+            enum: ['ghidra-bridge-py', 'http'],
+            description:
+              'Bridge backend: ghidra-bridge-py (pip TCP server on 4768) or http (REST bridge). Default: auto (pip first, then REST).',
           },
           binaryPath: {
             type: 'string',
@@ -10179,7 +10186,7 @@ export const GENERATED_TOOL_CATALOG = [
           },
           endpoint: {
             type: 'string',
-            description: 'Ghidra bridge server URL',
+            description: 'Ghidra bridge server URL (http backend only)',
           },
         },
         required: ['action'],

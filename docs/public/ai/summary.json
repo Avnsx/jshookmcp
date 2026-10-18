@@ -1,7 +1,19 @@
 {
   "name": "JSHookMCP",
-  "url": "https://vmoranv.github.io/",
-  "description": "JSHookMCP is a TypeScript MCP server (npm: @jshookmcp/jshook, AGPL-3.0) that gives AI agents 600+ tools across 36 capability domains: browser automation, CDP debugging, network capture and protocol analysis, JavaScript hooking and deobfuscation, cross-platform native FFI (Win32/Darwin/Linux), and declarative workflow orchestration. Run it with a single npx command.",
+  "url": "https://vmoranv.github.io/jshookmcp/",
+  "tagline": "Search-First Agentic Cross-Domain Reverse Engineering Workspace for AI Agents",
+  "description": "JSHookMCP is an open-source MCP server (npm: @jshookmcp/jshook, AGPL-3.0) providing 735 tools across 36 capability domains. It unites runtime telemetry across the full 7-layer stack: Network (HTTP/2, gRPC, WS) <-> DOM Events <-> JS AST & Turbofan JIT <-> WASM <-> Native Memory & Frida <-> Headless Unicorn Android JNI emulation (nemu) <-> OS Syscalls. It features a Search-First 3K-token profile ladder with hybrid BM25 + ONNX micro-embeddings to prevent LLM context bloat.",
+  "toolsCount": 735,
+  "domainsCount": 36,
+  "license": "AGPL-3.0-only",
+  "highlights": [
+    "Search-First 3K-token profile ladder (BM25 + ONNX + RRF + RL FeedbackTracker)",
+    "Cross-Domain Causal Evidence Graph (network down to native JNI and kernel syscalls)",
+    "Headless Native Android JNI emulation without devices or emulators (nemu / Unicorn)",
+    "Flutter and Dart AOT snapshot runtime introspection (dart-inspector)",
+    "Chromium Mojo IPC sniffing and mocking (mojo-ipc)",
+    "Cheat Engine & ReClass grade in-memory forensics (AOB scanning, pointer maps, vtables)"
+  ],
   "language": ["zh-CN", "en"],
   "repository": "https://github.com/vmoranv/jshookmcp",
   "install": "npx -y @jshookmcp/jshook"

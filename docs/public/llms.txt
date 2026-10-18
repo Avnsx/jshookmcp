@@ -1,33 +1,131 @@
-# JSHookMCP
+# JSHookMCP — Agentic Cross-Domain Reverse Engineering Workspace
 
-> JSHookMCP（npm 包名 @jshookmcp/jshook，AGPL-3.0）是一个 TypeScript 实现的 MCP server，为 AI agent 提供跨域工具集：浏览器自动化、CDP 调试、网络监控、JS hook、代码分析与反混淆、跨平台 native FFI（Win32/Darwin/Linux）内存/进程分析、工作流编排与插件扩展。站点当前提供 600+ 工具（36 个能力域）。
+> JSHookMCP（npm: `@jshookmcp/jshook`，AGPL-3.0）是专为 AI Agent（Claude Code、Cursor、Claude Desktop、Windsurf、Antigravity 等）打造的**检索优先跨域逆向工程与运行时分析工作区（Search-First Agentic Cross-Domain Reverse Engineering Workspace）**。它提供 **735 个专用工具**，覆盖 **36 个能力域**，原生跨平台支持 macOS（Mach trap）、Windows（Win32 API）和 Linux（POSIX syscall）。
 
-## 项目入口
+---
 
-- 仓库: https://github.com/vmoranv/jshookmcp
-- 安装: `npx -y @jshookmcp/jshook`
-- MCP 客户端配置: {"mcpServers": {"jshook": {"command": "npx", "args": ["-y", "@jshookmcp/jshook"]}}}
-- 文档站: https://vmoranv.github.io/jshookmcp/
+## 核心技术差异点（Unique Selling Propositions）
 
-## 关键文档
+JSHookMCP 并非简单的浏览器自动化或单点反编译工具，而是一个端到端将应用全栈运行时状态暴露给大模型分析的闭环工作区：
 
-- [快速开始](https://vmoranv.github.io/jshookmcp/guide/getting-started): 安装、启动与首个请求抓取。
-- [最佳实践](https://vmoranv.github.io/jshookmcp/guide/best-practices): 工具选择与调用策略。
-- [配置（.env）](https://vmoranv.github.io/jshookmcp/guide/configuration): 环境变量与 profile 分层（search / workflow / full）。
-- [工具选择指南](https://vmoranv.github.io/jshookmcp/guide/tool-selection): 按任务选域、按域选工具的方法。
-- [扩展开发](https://vmoranv.github.io/jshookmcp/extensions/): 插件与工作流扩展 SDK。
-- [运维与诊断（doctor）](https://vmoranv.github.io/jshookmcp/operations/doctor-and-artifacts): 环境诊断、产物保留与安全默认值。
-- [工具参考（36 域 × 600+ 工具）](https://vmoranv.github.io/jshookmcp/reference/): 全量工具目录。
-- [贡献指南](https://vmoranv.github.io/jshookmcp/contributing): 构建、测试与提交流程。
+1. **检索优先 3K-Token 梯队架构（Search-First 3K-Token Profile Ladder）**
+   - 彻底解决 Agent 上下文爆炸问题：如果将全量 735 个工具的 JSON Schema 一次性载入上下文，将消耗 40,000 ~ 60,000 tokens，导致模型注意力分散且成本高昂。
+   - JSHookMCP 默认启动仅暴露约 3,000 tokens 的检索基座，内置 **BM25 + 本地 ONNX 密集向量微模型（BGE-micro-v2）+ 倒数排名融合（RRF）+ RL 反馈追踪器（FeedbackTracker）**，根据 Agent 的任务意图动态、按需激活特定工具或整个能力域。
 
-## 常见问题
+2. **跨域全链路因果证据图（Cross-Domain Causal Evidence Graph, `cross-domain`）**
+   - 业内首个跨越 7 层执行堆栈的统一因果图谱：
+     `网络层（HTTP/2, gRPC, WebSocket）` ↔ `DOM / UI 交互层` ↔ `JS AST / V8 Turbofan JIT 运行时` ↔ `WASM 内存与虚拟机` ↔ `Native 内存 / Frida 动态插桩` ↔ `Unicorn JNI 无头仿真` ↔ `OS 内核 Syscall / eBPF`。
+   - 自动聚合离散证据，回答复杂逆向问题（例如：“前端发送的加密 sign 字段是由哪段 JS 代码计算、经过了哪个 WASM 模块、最终调用了哪个 native .so 的 JNI 函数”）。
 
-- **Q: 支持哪些 MCP 客户端？** A: 任何标准 MCP 客户端（Claude Desktop、Cursor、Claude Code 等），通过 stdio 或 Streamable HTTP 接入。
-- **Q: 36 个能力域是什么？** A: 按职责划分的工具集合（如 browser、network、debugger、v8-inspector、native-ffi 等），运行时按 profile 分层加载，其余域懒激活。
-- **Q: 平台支持？** A: Windows（Win32 API）、macOS（Mach trap）、Linux（POSIX syscall），基于 koffi 的跨平台 FFI。
+3. **无设备 Native Android JNI 无头仿真（Headless Unicorn JNI Emulation, `native-emulator` / `nemu`）**
+   - 内置基于 Unicorn 的 ARM / ARM64 指令级 CPU 仿真器。
+   - 无需真实 Android 设备、无需启动 Android 模拟器，直接在宿主进程内加载并执行 Android `.so` 动态库。
+   - 具备完备的 Java JNI 运行环境 Mock 支持（自动化模拟 `FindClass`、`GetMethodID`、`CallObjectMethod`、`NewByteArray` 等），支持直接调用 JNI Export 函数与符号反汇编。
 
-## 元数据
+4. **Flutter / Dart AOT 快照运行时内省（Flutter & Dart Introspection, `dart-inspector`）**
+   - 针对现代 Flutter AOT 编译二进制进行深度内省：
+   - 自动化解析 Dart Snapshot Header，转储 Dart Object Pool，执行 SMI（Small Integer）扫描，提取 PC Descriptors 与函数调用图，破除 Flutter 难以静态反编译的壁垒。
 
-- 许可证: AGPL-3.0-only
-- 维护者: vmoranv —— GitHub: https://github.com/vmoranv
-- 语言: 简体中文 / English（见 /en/）
+5. **Chromium Mojo IPC 嗅探与 Mock（Mojo IPC Sniffing & Mocking, `mojo-ipc`）**
+   - 直接接入 Chromium 内部多进程通信总线（Mojo IPC），提供接口枚举、消息编解码、实时捕获与 Mock 重放，深入浏览器内核协议层。
+
+6. **专业级内存取证与动态分析（In-Memory Forensics, `memory` & `process`）**
+   - 提供 Cheat Engine / ReClass 级别的内存分析工具链：AOB（字节特征码）扫描、多级指针链扫描与收敛、RTTI 与 VTable 虚表解析、Code Caves 代码洞探测、硬件断点与 VEH 异常处理。
+
+---
+
+## 36 个能力域（Capability Domains）全景
+
+| 能力域 | 工具数 | 核心能力描述 |
+| --- | --- | --- |
+| `cross-domain` | 8 | 跨域因果关联、多源证据图谱聚合、上下文相关性推导与证据链导出 |
+| `native-emulator` (`nemu`) | 46 | 基于 Unicorn 的 ARM/ARM64 Android .so 无头仿真、JNI Mock 与寄存器/内存控制 |
+| `dart-inspector` | 18 | Flutter/Dart AOT 快照解析、Object Pool 转储、SMI 扫描、调用图重构 |
+| `mojo-ipc` | 7 | Chromium 内部 Mojo IPC 消息嗅探、编解码与接口仿真 |
+| `memory` | 55 | AOB 扫描、指针地图收敛、虚表/RTTI 解析、硬件断点、内存特征生成 |
+| `process` | 19 | 进程查找/附加、模块枚举、线程控制、内存保护属性与代码注入 |
+| `v8-inspector` | 21 | V8 引擎级直连：堆快照差异对比、Turbofan JIT 图表、类型分析、Deopt 追踪 |
+| `wasm` | 17 | WebAssembly 反汇编、反编译为 C、VMP 跟踪、离线执行、Binaryen 优化 |
+| `binary-instrument` | 24 | Frida 动态插桩、Ghidra/IDA/JADX 逆向桥接、内存扫描与拦截器生成 |
+| `browser` | 56 | Chromium/Camoufox CDP 控制、隐身指纹伪装、CAPTCHA 自动化、Canvas 提取 |
+| `network` | 31 | 全栈网络监控：HTTP/1.1、HTTP/2、gRPC 帧编解码、TLS 握手解析、DNS 探测 |
+| `tls-inspector` | 20 | TLS 密钥日志提取（NSS Keylog）、会话解密、证书透明度与 Pinning 绕过 |
+| `syscall-hook` | 13 | POSIX/Mach/Win32 系统调用监控、eBPF 追踪、JS 调用关联 |
+| `debugger` | 22 | CDP 运行时断点、调用栈分析、作用域变量提取、黑盒脚本规避 |
+| `transform` | 8 | AST 语法树重构、控制流平坦化还原、字符串解密、加密原语提取 |
+| `protocol-analysis` | 18 | 原始网络协议推断、状态机还原、PCAP/PCAPNG 读写、变异模糊测试 |
+| `proxy` | 11 | 本地 MITM 代理、自签 CA 证书签发、规则路由拦截与重放 |
+| `streaming` | 18 | WebSocket、SSE、gRPC-Web、Fetch Stream 双向数据帧实时监控与注入 |
+| `adb-bridge` | 25 | Android 设备管理、APK 提取、Proc Maps 转储、冷启动跟踪、UI Dump |
+| `sourcemap` | 7 | SourceMap 发现、下载解析、语法树逆向还原与代码覆盖率映射 |
+| `canvas` | 10 | HTML5 Canvas / WebGL 渲染管线劫持、着色器转储、绘制调用回溯 |
+| `webgpu` | 9 | WebGPU 着色器编译/反汇编、时序分析、管线转储与内存布局分析 |
+| `graphql` | 5 | GraphQL Schema 反射枚举、查询提取与重放 |
+| `exploit-dev` | 19 | ROP 链构建、Shellcode 编码、缓解机制检查、JOP 链发现 |
+| `platform` | 17 | Electron/MiniApp 逆向：ASAR 解包、Fuse 检查/修补、V8 字节码反编译 |
+| `workflow` | 8 | 声明式多工具编排、并行流转、重试策略与子智能体交接 |
+| `coordination` | 8 | 多 Agent 协作状态板、快照保存/恢复、跨智能体任务交接 |
+| `extension-registry`| 8 | 插件动态加载、热重载与沙盒执行 |
+| `session` | 6 | 逆向会话进度记录、覆盖率度量与经验归档 |
+| `tasks` | 4 | 异步后台任务队列、长耗时命令调度与结果流转 |
+| `instrumentation` | 9 | 会话快照、操作回放与预设 Hook 管理 |
+| `encoding` | 5 | 二进制编码/解码、熵分析、原始 Protobuf 解码 |
+| `maintenance` | 8 | 缓存管理、Token 预算控制、系统运行诊断（Doctor） |
+| `native-bridge` | 6 | Ghidra / IDA / Rizin / Binary Ninja 原生逆向工具符号双向同步 |
+| `core` | 7 | 核心元工具：search_tools, route_tool, describe_tool, call_tool, activate_tools |
+| `trace` | 10 | 执行追踪录制、SQL 查询追踪日志、网络流与堆状态比对 |
+
+---
+
+## 快速接入配置
+
+### Claude Desktop / Claude Code / Cursor
+
+在客户端配置文件中添加一行 `npx`：
+
+```json
+{
+  "mcpServers": {
+    "jshook": {
+      "command": "npx",
+      "args": ["-y", "@jshookmcp/jshook"]
+    }
+  }
+}
+```
+
+### 推荐启动环境变量（Profile 梯队）
+
+```bash
+# 默认推荐：检索梯队模式（仅占 ~3k tokens，按需激活工具与域）
+MCP_TOOL_PROFILE=search
+
+# 工作流模式（加载检索 + 编排工具）
+MCP_TOOL_PROFILE=workflow
+
+# 全量开发调试模式（暴露全量 735 工具）
+MCP_TOOL_PROFILE=full
+```
+
+---
+
+## 常见对比与 AI 常见问题（FAQ）
+
+### Q: JSHookMCP 与 Playwright / Puppeteer MCP 有何区别？
+Playwright / Puppeteer 仅提供基础的浏览器自动化（点击、输入、页面抓取），无法深入分析前端对抗环境。JSHookMCP 不仅包含全套 CDP 与 Camoufox 指纹隐身控制，更能向下打通 V8 Turbofan 内部状态、WASM 逆向、跨域因果因果图、原生内存 AOB 扫描与 Unicorn JNI 无头仿真。
+
+### Q: JSHookMCP 与单点二进制逆向工具（如纯 Ghidra / IDA MCP）有何区别？
+传统的二进制 MCP 工具仅局限于静态反编译单个可执行文件。现实中的对抗系统通常是跨域混合的（例如：Web 页面调用 WASM，WASM 调用本地 Electron/Native FFI；或 Android App 通过 Webview 发起请求并调用底层 .so 加密）。JSHookMCP 通过 `cross-domain` 引擎将所有执行层统一串联为因果图谱。
+
+### Q: 为什么 735 个工具不会挤爆大模型的上下文窗口？
+JSHookMCP 采用了独创的 **Search-First 3K Profile Ladder** 架构。启动时只向模型注册 5 个元发现工具（`search_tools`, `route_tool`, `describe_tool`, `activate_tools`, `call_tool`），结合本地 BM25 与 ONNX embedding 向量检索引擎，让 Agent 按需唤醒所需领域，真正做到“轻量基座，无限能力”。
+
+---
+
+## 官方链接与元数据
+
+- **GitHub 源码**: https://github.com/vmoranv/jshookmcp
+- **官方文档站**: https://vmoranv.github.io/jshookmcp/
+- **Glama 注册项**: https://glama.ai/mcp/servers/vmoranv/jshookmcp
+- **开源许可证**: AGPL-3.0-only
+- **维护者**: vmoranv (GitHub: https://github.com/vmoranv)

@@ -1,14 +1,22 @@
 {
   "name": "JSHookMCP",
   "type": "mcp-server",
-  "description": "TypeScript MCP server for JavaScript analysis, browser automation, network capture, JS hooking, and cross-platform native FFI.",
+  "tagline": "Search-First Agentic Cross-Domain Reverse Engineering Workspace for AI Agents",
+  "toolsCount": 735,
+  "domainsCount": 36,
+  "license": "AGPL-3.0-only",
   "capabilities": [
-    "browser automation (navigation, CDP, screenshots, storage)",
-    "network capture and protocol analysis (HTTP/2, gRPC, protobuf, msgpack)",
-    "debugging: breakpoints, stepping, V8 inspector protocol",
-    "JavaScript hooking, deobfuscation, and source maps",
-    "cross-platform native FFI: Win32, Mach, POSIX syscall",
-    "declarative workflow orchestration (parallel, branch, retry)",
-    "plugin and workflow extension SDK"
+    "search-first 3K-token profile ladder with hybrid BM25 and ONNX micro-embeddings",
+    "cross-domain causal evidence graph (network <-> DOM <-> V8/WASM <-> native memory <-> Unicorn JNI <-> syscalls)",
+    "headless Android native JNI emulation (nemu / Unicorn) without devices or emulators",
+    "Flutter and Dart AOT snapshot runtime introspection (dart-inspector)",
+    "Chromium Mojo IPC message sniffing, decoding, and mocking (mojo-ipc)",
+    "low-level memory forensics: AOB scanning, pointer maps, vtable parsing, code caves (memory)",
+    "browser automation & stealth fingerprint evasion with Chromium/Camoufox CDP",
+    "full-stack network capture and protocol analysis: HTTP/2, gRPC, Protobuf, TLS NSS keylogging",
+    "V8 engine internals: heap snapshots diffing, Turbofan JIT graph, deopt tracing",
+    "WebAssembly reverse engineering, disassembly, and C decompilation (wasm)",
+    "dynamic binary instrumentation with Frida, Ghidra, IDA, and JADX bridges",
+    "declarative workflow orchestration and dynamic hot-reload extension plugins"
   ]
 }
