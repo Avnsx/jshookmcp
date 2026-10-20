@@ -39,6 +39,8 @@ import { TrigramIndex } from './TrigramIndex';
 import { FeedbackTracker } from './FeedbackTracker';
 import { QueryNormalizer } from './QueryNormalizer';
 import { ReRanker, type ReRankInput, type ToolMetadata } from './ReRanker';
+import { ScoreCalibrator } from './ScoreCalibrator';
+import { WorkflowTransitionGraph } from './WorkflowTransitionGraph';
 import { SearchQualityTracker } from './SearchQualityTracker';
 import {
   getGlobalInstrumentation,
@@ -608,7 +610,11 @@ export class ToolSearchEngine {
     activeToolNames?: ReadonlySet<string>,
     visibleDomains?: ReadonlySet<string>,
     profile?: ToolProfile,
-  ): { quickResults: ToolSearchResult[]; preAdjust: Float64Array; quickLatencyMs: number } {
+  ): {
+    quickResults: ToolSearchResult[];
+    preAdjust: Array<[number, number]>;
+    quickLatencyMs: number;
+  } {
     const quickStartMs = performance.now();
     const scores = this.quickPathSearch(query, queryTokens);
     const preAdjust = capturePositiveScores(scores);
@@ -780,6 +786,20 @@ export class ToolSearchEngine {
 
     // ── Graph expansion: affinity + domain hub (§4.1.4) ──
     this.applyGraphExpansion(scores);
+
+    // ── Session workflow transition boost (Industrial Swing/ItemCF inspired) ──
+    if (activeToolNames && activeToolNames.size > 0) {
+      const workflowBoosts = WorkflowTransitionGraph.getTransitionBoosts(activeToolNames);
+      if (workflowBoosts.size > 0) {
+        for (let i = 0; i < this.docCount; i++) {
+          if (scores[i]! > 0) {
+            const boost = workflowBoosts.get(this.docs[i]!.name);
+            if (boost !== undefined) scores[i]! *= boost;
+          }
+        }
+      }
+    }
+
     const preAdjust = capturePositiveScores(scores);
     const results = this.projectScores(
       scores,
@@ -792,16 +812,16 @@ export class ToolSearchEngine {
       explicitToolMention,
     );
 
-    // Relevance Confidence Floor:
+    // Calibrated Relevance Confidence Floor (Platt / Sigmoid calibrated):
     // If no explicit tool was mentioned, no intent rules fired,
-    // and the best candidate score is below the minimal noise floor (< 2.0),
+    // and the top candidate fails the query-length adaptive confidence floor,
     // treat as out-of-domain noise and reject.
     if (
       this.docCount >= 20 &&
       explicitToolMention === null &&
       intentToolBonuses.size === 0 &&
       results.length > 0 &&
-      results[0]!.score < 2.0
+      !ScoreCalibrator.isConfidentMatch(results[0]!.score, contentTokens.length)
     ) {
       const latencyMs = performance.now() - searchStartTime;
       telemetrySpan.end({ 'search.result_count': 0, 'search.latency_ms': Math.round(latencyMs) });
@@ -898,7 +918,12 @@ export class ToolSearchEngine {
       domain: result.domain ?? '',
       description: this.docs[this.docNameIndex.get(result.name) ?? 0]?.description ?? '',
     }));
-    const reRanked = this.reRanker.reRank(query, reRankInputs, results.length);
+    const reRanked = this.reRanker.reRank(query, reRankInputs, {
+      topK: results.length,
+      enableMMR: true,
+      diversityLambda: 0.85,
+      maxPerDomain: 2,
+    });
     const rankMap = new Map(reRanked.map((item, index) => [item.toolName, index]));
     return results
       .slice()

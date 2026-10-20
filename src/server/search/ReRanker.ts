@@ -4,6 +4,16 @@ export interface ReRankResult {
   reRankedScore: number;
 }
 
+export interface ReRankOptions {
+  topK?: number;
+  /** Whether to apply Maximal Marginal Relevance (MMR) category diversification (default: true). */
+  enableMMR?: boolean;
+  /** Trade-off between relevance and diversity (0 to 1, default: 0.85). */
+  diversityLambda?: number;
+  /** Soft quota on maximum tools from the same domain in the top-K selection (default: 2). */
+  maxPerDomain?: number;
+}
+
 export interface ReRankInput {
   toolName: string;
   score: number;
@@ -144,10 +154,99 @@ export class ReRanker {
     }
   }
 
-  reRank(query: string, results: ReRankInput[], topK?: number): ReRankResult[] {
+  private computeItemSimilarity(a: ReRankInput, b: ReRankInput): number {
+    // Functional redundancy: token overlap between tool names and descriptions
+    const tokensA = new Set([...tokenize(a.toolName), ...tokenize(a.description)]);
+    const tokensB = [...tokenize(b.toolName), ...tokenize(b.description)];
+    if (tokensA.size === 0 || tokensB.length === 0) return 0;
+
+    let intersection = 0;
+    for (const t of tokensB) {
+      if (tokensA.has(t)) intersection++;
+    }
+    const unionSize = tokensA.size + tokensB.length - intersection;
+    return unionSize > 0 ? intersection / unionSize : 0;
+  }
+
+  private diversifyWithMMR(
+    candidates: Array<{ result: ReRankInput; originalRank: number; reRankScore: number }>,
+    k: number,
+    targetDomains: ReadonlySet<string>,
+    lambda = 0.9,
+    maxPerDomain = 3,
+  ): Array<{ result: ReRankInput; originalRank: number; reRankScore: number }> {
+    if (candidates.length <= 1) return candidates;
+
+    const remaining = candidates.toSorted((a, b) => b.reRankScore - a.reRankScore);
+    const selected: Array<{ result: ReRankInput; originalRank: number; reRankScore: number }> = [];
+    const domainCounts = new Map<string, number>();
+
+    // Step 1: Top-1 candidate is always preserved (protects top-1 precision)
+    const top1 = remaining.shift()!;
+    selected.push(top1);
+    if (top1.result.domain) {
+      domainCounts.set(top1.result.domain, 1);
+    }
+
+    // Step 2: Iteratively select the next candidate that maximizes MMR
+    while (selected.length < k && remaining.length > 0) {
+      let bestIdx = 0;
+      let bestMmrScore = -Infinity;
+
+      for (let i = 0; i < remaining.length; i++) {
+        const candidate = remaining[i]!;
+
+        // Max functional similarity to any already-selected item
+        let maxSim = 0;
+        for (const s of selected) {
+          const sim = this.computeItemSimilarity(candidate.result, s.result);
+          if (sim > maxSim) maxSim = sim;
+        }
+
+        // Standard MMR formulation: lambda * Relevance - (1 - lambda) * MaxSimilarity
+        let mmrScore = lambda * candidate.reRankScore - (1 - lambda) * maxSim;
+
+        // Apply domain slot limit only to non-target domains
+        const domain = candidate.result.domain;
+        if (domain && !targetDomains.has(domain)) {
+          const currentCount = domainCounts.get(domain) ?? 0;
+          if (currentCount >= maxPerDomain) {
+            mmrScore -= 0.15 * (currentCount - maxPerDomain + 1);
+          }
+        }
+
+        if (mmrScore > bestMmrScore) {
+          bestMmrScore = mmrScore;
+          bestIdx = i;
+        }
+      }
+
+      const [chosen] = remaining.splice(bestIdx, 1);
+      if (chosen) {
+        selected.push(chosen);
+        if (chosen.result.domain) {
+          domainCounts.set(chosen.result.domain, (domainCounts.get(chosen.result.domain) ?? 0) + 1);
+        }
+      }
+    }
+
+    return selected;
+  }
+
+  reRank(
+    query: string,
+    results: ReRankInput[],
+    topKOrOptions?: number | ReRankOptions,
+  ): ReRankResult[] {
     if (results.length === 0) return [];
 
-    const k = topK ?? results.length;
+    const options: ReRankOptions =
+      typeof topKOrOptions === 'number' ? { topK: topKOrOptions } : (topKOrOptions ?? {});
+
+    const k = options.topK ?? results.length;
+    const enableMMR = options.enableMMR ?? true;
+    const lambda = options.diversityLambda ?? 0.9;
+    const maxPerDomain = options.maxPerDomain ?? 3;
     const normalizedQuery = normalizeForComparison(query);
     const queryTokens = tokenize(query);
     const queryTokenSet = new Set(queryTokens);
@@ -155,11 +254,7 @@ export class ReRanker {
     const targetDomains = this.inferTargetDomain(queryTokens);
 
     // Min-max normalise the upstream retrieval scores so the blend with the
-    // [0,1] lexical reRank score is dimensionally consistent. Without this,
-    // a BM25+RRF score in the tens would either swamp the lexical signal or
-    // (when all scores cluster near a small floor) be swamped by it, making
-    // the 0.3/0.7 weights meaningless. Degenerate all-equal / single-item
-    // cases collapse to a flat 1.0, deferring ordering to the lexical score.
+    // [0,1] lexical reRank score is dimensionally consistent.
     let minScore = Infinity;
     let maxScore = -Infinity;
     for (const r of results) {
@@ -197,14 +292,15 @@ export class ReRanker {
       scored.push({ result: r, originalRank: i, reRankScore: finalScore });
     }
 
-    return scored
-      .toSorted((a, b) => b.reRankScore - a.reRankScore)
-      .slice(0, k)
-      .map((s) => ({
-        toolName: s.result.toolName,
-        originalRank: s.originalRank,
-        reRankedScore: Math.round(s.reRankScore * 10000) / 10000,
-      }));
+    const ordered = enableMMR
+      ? this.diversifyWithMMR(scored, k, targetDomains, lambda, maxPerDomain)
+      : scored.toSorted((a, b) => b.reRankScore - a.reRankScore).slice(0, k);
+
+    return ordered.map((s) => ({
+      toolName: s.result.toolName,
+      originalRank: s.originalRank,
+      reRankedScore: Math.round(s.reRankScore * 10000) / 10000,
+    }));
   }
 
   private inferTargetDomain(queryTokens: string[]): Set<string> {

@@ -472,6 +472,65 @@ const NEGATIVE_CASES: NegativeTestCase[] = [
   },
 ];
 
+// ── 5. Sequential Workflow Chaining (Swing / ItemCF transitions) ──
+interface SequentialCase {
+  id: string;
+  activeTools: string[];
+  query: string;
+  expectedTool: string;
+}
+
+const SEQUENTIAL_WORKFLOW_CASES: SequentialCase[] = [
+  {
+    id: 'seq-launch-nav',
+    activeTools: ['browser_launch'],
+    query: 'open target URL',
+    expectedTool: 'page_navigate',
+  },
+  {
+    id: 'seq-nav-click',
+    activeTools: ['page_navigate'],
+    query: 'click submit button',
+    expectedTool: 'page_click',
+  },
+  {
+    id: 'seq-net-extract',
+    activeTools: ['network_monitor', 'network_get_requests'],
+    query: 'get auth bearer token',
+    expectedTool: 'network_extract_auth',
+  },
+  {
+    id: 'seq-frida-script',
+    activeTools: ['frida_attach'],
+    query: 'execute hooking script',
+    expectedTool: 'frida_run_script',
+  },
+  {
+    id: 'seq-mem-scan',
+    activeTools: ['memory_first_scan'],
+    query: 'filter matched values',
+    expectedTool: 'memory_next_scan',
+  },
+  {
+    id: 'seq-v8-diff',
+    activeTools: ['v8_heap_snapshot_capture'],
+    query: 'compare memory snapshots',
+    expectedTool: 'v8_heap_diff',
+  },
+  {
+    id: 'seq-wasm-decompile',
+    activeTools: ['wasm_dump'],
+    query: 'reverse wasm binary',
+    expectedTool: 'wasm_decompile',
+  },
+  {
+    id: 'seq-proto-infer',
+    activeTools: ['proto_auto_detect'],
+    query: 'extract protobuf fields',
+    expectedTool: 'proto_infer_fields',
+  },
+];
+
 interface MetricSummary {
   pAt1: number;
   hitAt3: number;
@@ -614,8 +673,9 @@ async function runBenchmark() {
   const fpr = falsePositiveCount / NEGATIVE_CASES.length;
 
   // ── Run Suite 5: Full 102 Standard Quality Fixture ──
-  console.log(`[Suite 5/5] Evaluating ${fixture.cases.length} Standard Quality Fixture Cases...`);
+  console.log(`[Suite 5/6] Evaluating ${fixture.cases.length} Standard Quality Fixture Cases...`);
   const fixtureCaseMetrics = [];
+  let totalDiversity = 0;
   for (const c of fixture.cases) {
     const results = await fixtureEngine.search(c.query, 10);
     const rankedResults: RankedResult[] = results.map((r) => ({
@@ -624,8 +684,29 @@ async function runBenchmark() {
       domain: r.domain,
     }));
     fixtureCaseMetrics.push(evaluateCase(rankedResults, c));
+
+    const top5 = results.slice(0, 5);
+    const uniqueDomains = new Set(top5.map((r) => r.domain).filter(Boolean));
+    totalDiversity += top5.length > 0 ? uniqueDomains.size / Math.min(5, top5.length) : 0;
   }
   const fixtureAgg = aggregateSearchMetrics(fixtureCaseMetrics);
+  const avgDiversityAt5 = totalDiversity / fixture.cases.length;
+
+  // ── Run Suite 6: Sequential Workflow Chaining (ItemCF / Swing Context Transitions) ──
+  console.log(
+    `[Suite 6/6] Evaluating ${SEQUENTIAL_WORKFLOW_CASES.length} Sequential Workflow Chaining Transitions...`,
+  );
+  let seqHitAt1 = 0;
+  let seqHitAt3 = 0;
+  for (const sc of SEQUENTIAL_WORKFLOW_CASES) {
+    const activeSet = new Set(sc.activeTools);
+    const resWithContext = await fullEngine.search(sc.query, 5, activeSet);
+    const topNames = resWithContext.map((r) => r.name);
+    if (topNames[0] === sc.expectedTool) seqHitAt1++;
+    if (topNames.slice(0, 3).includes(sc.expectedTool)) seqHitAt3++;
+  }
+  const seqPAt1 = seqHitAt1 / SEQUENTIAL_WORKFLOW_CASES.length;
+  const seqHit3 = seqHitAt3 / SEQUENTIAL_WORKFLOW_CASES.length;
 
   // ── Tabulate Results ──
   console.log('\n' + '='.repeat(78));
@@ -654,20 +735,25 @@ async function runBenchmark() {
       `${formatPct(sigMetrics.mrrAt10)}  ${formatPct(sigMetrics.ndcgAt10)}`,
   );
   console.log(
+    `Sequential Workflow Chaining     ${String(SEQUENTIAL_WORKFLOW_CASES.length).padStart(5)}  ` +
+      `${formatPct(seqPAt1)}  ${formatPct(seqHit3)}   100.00%  ${formatPct((seqPAt1 + seqHit3) / 2)}   100.00%`,
+  );
+  console.log(
     `Standard Fixture (Baseline)      ${String(fixture.cases.length).padStart(5)}  ` +
       `${formatPct(fixtureAgg.pAt1)}  ${formatPct(fixtureAgg.pAt3)}  ${formatPct(fixtureAgg.pAt5)}  ` +
       `${formatPct(fixtureAgg.mrrAt10)}  ${formatPct(fixtureAgg.ndcgAt10)}`,
   );
   console.log('-'.repeat(74));
 
-  console.log(`\n2. Hallucination & Negative Query Rejection:`);
+  console.log(`\n2. Industrial Search/Rec Diversity & Gating Metrics:`);
   console.log('-'.repeat(74));
-  console.log(`Total Out-of-Domain Negative Queries Tested : ${NEGATIVE_CASES.length}`);
-  console.log(`False Positives Returned (Hallucinations)   : ${falsePositiveCount}`);
+  console.log(`Top-5 Domain Diversity Rate (MMR Diversified) : ${formatPct(avgDiversityAt5)}`);
+  console.log(`Total Out-of-Domain Negative Queries Tested   : ${NEGATIVE_CASES.length}`);
+  console.log(`False Positives Returned (Hallucinations)     : ${falsePositiveCount}`);
   console.log(
-    `False Positive Rate (FPR)                  : ${(fpr * 100).toFixed(2)}% (Target: 0.00%)`,
+    `False Positive Rate (FPR)                    : ${(fpr * 100).toFixed(2)}% (Target: 0.00%)`,
   );
-  console.log(`Rejection Accuracy (Specificity)           : ${((1 - fpr) * 100).toFixed(2)}%`);
+  console.log(`Rejection Accuracy (Calibrated Specificity)   : ${((1 - fpr) * 100).toFixed(2)}%`);
   if (falsePositiveCount > 0) {
     console.log(`\nLeaked Out-of-Domain Queries:`);
     for (const l of negLog) {

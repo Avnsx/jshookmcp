@@ -445,4 +445,72 @@ describe('search/ReRanker', () => {
 
     expect(reRanked).toHaveLength(1);
   });
+
+  describe('MMR category diversification', () => {
+    it('diversifies top results across domains when relevance scores are close', () => {
+      const reRanker = new ReRanker();
+      // Suppose 4 network tools and 1 transform tool have similar relevance
+      const results: ReRankInput[] = [
+        makeInput({
+          toolName: 'network_intercept_1',
+          score: 10,
+          domain: 'network',
+          description: 'Intercept network traffic',
+        }),
+        makeInput({
+          toolName: 'network_intercept_2',
+          score: 9.8,
+          domain: 'network',
+          description: 'Intercept network packets',
+        }),
+        makeInput({
+          toolName: 'network_intercept_3',
+          score: 9.6,
+          domain: 'network',
+          description: 'Intercept network frames',
+        }),
+        makeInput({
+          toolName: 'transform_workbench',
+          score: 9.5,
+          domain: 'transform',
+          description: 'Transform and deobfuscate payload',
+        }),
+      ];
+
+      // Re-rank requesting top-3 with maxPerDomain: 2
+      const diversified = reRanker.reRank('intercept traffic', results, {
+        topK: 3,
+        enableMMR: true,
+        maxPerDomain: 2,
+      });
+
+      const topNames = diversified.map((d) => d.toolName);
+      // Top-1 must be the best network tool
+      expect(topNames[0]).toBe('network_intercept_1');
+      // transform_workbench should be selected in top-3 due to domain diversification
+      expect(topNames).toContain('transform_workbench');
+    });
+
+    it('can be disabled to restore pure greedy relevance sorting', () => {
+      const reRanker = new ReRanker();
+      const results: ReRankInput[] = [
+        makeInput({ toolName: 'net_1', score: 10, domain: 'network', description: 'Network 1' }),
+        makeInput({ toolName: 'net_2', score: 9.8, domain: 'network', description: 'Network 2' }),
+        makeInput({ toolName: 'net_3', score: 9.6, domain: 'network', description: 'Network 3' }),
+        makeInput({
+          toolName: 'trans_1',
+          score: 8.0,
+          domain: 'transform',
+          description: 'Transform 1',
+        }),
+      ];
+
+      const greedy = reRanker.reRank('network', results, {
+        topK: 3,
+        enableMMR: false,
+      });
+
+      expect(greedy.map((g) => g.toolName)).toEqual(['net_1', 'net_2', 'net_3']);
+    });
+  });
 });
