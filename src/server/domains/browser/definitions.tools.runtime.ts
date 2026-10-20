@@ -5,9 +5,13 @@ import { tool } from '@server/registry/tool-builder';
 export const browserRuntimeTools: Tool[] = [
   tool('get_detailed_data', (t) =>
     t
-      .desc('Retrieve large data by detailId.')
+      .desc(
+        'Retrieve large data by detailId. Supports slicing to prevent context window explosion.',
+      )
       .string('detailId', 'Detail ID from previous response')
       .string('path', 'Path to specific nested data')
+      .number('offset', 'Optional zero-based slice start offset for arrays/strings/keys')
+      .number('limit', 'Optional maximum slice length/count')
       .required('detailId')
       .query(),
   ),

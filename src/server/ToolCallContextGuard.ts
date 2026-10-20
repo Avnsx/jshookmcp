@@ -190,6 +190,12 @@ export class ToolCallContextGuard {
    */
   private readonly doomLoopStates = new Map<string, { lastKey: string | null; count: number }>();
 
+  /** Sliding window execution complexity gas usage records per session. */
+  private readonly gasUsage = new Map<string, Array<{ timestamp: number; cost: number }>>();
+
+  /** Isomorphic semantic call tracker (normalized args) per session. */
+  private readonly isomorphicStates = new Map<string, { lastKey: string | null; count: number }>();
+
   constructor(getProvider: () => TabContextProvider | null) {
     this.getProvider = getProvider;
   }
@@ -294,6 +300,78 @@ export class ToolCallContextGuard {
   /** Test hook: clear all doom-loop counters across sessions. */
   resetDoomLoopStatesForTesting(): void {
     this.doomLoopStates.clear();
+  }
+
+  /**
+   * Record tool execution complexity units against a sliding-window Gas budget.
+   * If accumulated units exceed maxWindowUnits, returns trip details.
+   */
+  recordExecutionCost(toolName: string, config?: GasBudgetConfig): GasBudgetTrip | null {
+    const limit = config?.maxWindowUnits ?? 0;
+    if (limit <= 0) return null;
+    const windowMs = config?.windowMs ?? 60_000;
+    const now = Date.now();
+    const scope = getToolRequestContext()?.sessionId ?? 'default';
+
+    let records = this.gasUsage.get(scope);
+    if (!records) {
+      records = [];
+      this.gasUsage.set(scope, records);
+    }
+
+    const cutoff = now - windowMs;
+    const filtered = records.filter((r) => r.timestamp > cutoff);
+    const cost = getToolExecutionComplexity(toolName);
+    filtered.push({ timestamp: now, cost });
+    this.gasUsage.set(scope, filtered);
+
+    const totalUsed = filtered.reduce((sum, r) => sum + r.cost, 0);
+    if (totalUsed > limit) {
+      const oldest = filtered[0]?.timestamp ?? now;
+      const resetInMs = Math.max(0, oldest + windowMs - now);
+      return { usedCost: totalUsed, limit, resetInMs };
+    }
+    return null;
+  }
+
+  /**
+   * Record tool call with normalized semantic arguments (isomorphic loop detection).
+   * Catches agents that mutate cosmetic/ephemeral parameters across loops.
+   */
+  recordIsomorphicCall(
+    toolName: string,
+    args: Record<string, unknown>,
+    threshold = 4,
+  ): IsomorphicTrip | null {
+    if (threshold <= 0) return null;
+    const scope = getToolRequestContext()?.sessionId ?? 'default';
+    let state = this.isomorphicStates.get(scope);
+    if (!state) {
+      if (this.isomorphicStates.size >= MAX_REPEAT_SCOPES) {
+        const oldest = this.isomorphicStates.keys().next().value as string | undefined;
+        if (oldest) this.isomorphicStates.delete(oldest);
+      }
+      state = { lastKey: null, count: 0 };
+      this.isomorphicStates.set(scope, state);
+    }
+
+    const semanticSig = normalizeSemanticArgs(args);
+    const key = `${toolName}\u0000${semanticSig}`;
+    if (state.lastKey === key) {
+      state.count += 1;
+    } else {
+      state.lastKey = key;
+      state.count = 1;
+    }
+
+    if (state.count < threshold) return null;
+    return { count: state.count, threshold, semanticSignature: key };
+  }
+
+  /** Test hook: clear all gas and isomorphic counters across sessions. */
+  resetExecutionBudgetForTesting(): void {
+    this.gasUsage.clear();
+    this.isomorphicStates.clear();
   }
 
   /**
@@ -500,6 +578,84 @@ export interface DoomLoopTrip {
   fullAdvisory: boolean;
 }
 
+export interface GasBudgetConfig {
+  /** Maximum execution complexity units allowed in a sliding window. 0 disables. */
+  maxWindowUnits?: number;
+  /** Sliding window duration in milliseconds (default: 60,000ms). */
+  windowMs?: number;
+}
+
+export interface GasBudgetTrip {
+  usedCost: number;
+  limit: number;
+  resetInMs: number;
+}
+
+export interface IsomorphicTrip {
+  count: number;
+  threshold: number;
+  semanticSignature: string;
+}
+
+/**
+ * Determine execution complexity weight (Gas cost) based on computational intensity.
+ * Prevents autonomous agents from exhausting host resources with heavy operations.
+ */
+export function getToolExecutionComplexity(toolName: string): number {
+  if (
+    toolName.includes('decompile') ||
+    toolName.includes('symbolic') ||
+    toolName.includes('memory_scan') ||
+    toolName.includes('unidbg') ||
+    toolName.includes('ghidra') ||
+    toolName.includes('jadx') ||
+    toolName.includes('nemu_') ||
+    toolName.includes('exploit_')
+  ) {
+    return 25;
+  }
+  if (
+    toolName.startsWith('page_') ||
+    toolName.startsWith('adb_') ||
+    toolName.startsWith('network_') ||
+    toolName.startsWith('frida_') ||
+    toolName.startsWith('debugger_')
+  ) {
+    return 5;
+  }
+  return 1;
+}
+
+/**
+ * Normalize arguments by stripping ephemeral, non-structural metadata keys
+ * (comments, timestamps, nonces) for isomorphic loop detection.
+ */
+export function normalizeSemanticArgs(args: Record<string, unknown>): string {
+  if (args === null || typeof args !== 'object') return '';
+  const ignoredKeys = new Set([
+    'comment',
+    'description',
+    'timestamp',
+    'nonce',
+    '_meta',
+    'requestId',
+    'id',
+  ]);
+  const sortedKeys = Object.keys(args)
+    .filter((k) => !ignoredKeys.has(k))
+    .toSorted();
+  const filtered: Record<string, unknown> = {};
+  for (const k of sortedKeys) {
+    const v = args[k];
+    filtered[k] = typeof v === 'number' ? Math.round(v * 100) / 100 : v;
+  }
+  try {
+    return JSON.stringify(filtered);
+  } catch {
+    return '<unserializable>';
+  }
+}
+
 /**
  * Stable JSON serialization of tool arguments used for rule `pattern`
  * matching and doom-loop keys. The `_meta` envelope is excluded: clients may
@@ -667,6 +823,51 @@ export function buildDoomLoopErrorResponse(
       'method entirely.';
   }
   return buildGateErrorResponse(payload);
+}
+
+/**
+ * Build the execution gas budget trip error response.
+ */
+export function buildGasBudgetErrorResponse(
+  toolName: string,
+  trip: GasBudgetTrip,
+): { content: Array<{ type: 'text'; text: string }>; isError: true } {
+  return buildGateErrorResponse({
+    error:
+      `Execution complexity gas budget exceeded for tool "${toolName}" (${trip.usedCost} units used > ${trip.limit} limit). ` +
+      `The call was throttled to protect host resources.`,
+    gasBudget: {
+      toolName,
+      usedCost: trip.usedCost,
+      limit: trip.limit,
+      retryAfterSeconds: Math.ceil(trip.resetInMs / 1000),
+    },
+    hint:
+      'Too many computationally intensive operations (decompilations, memory scans, symbolic execution) ' +
+      'were triggered in a short interval. Back off and consolidate your analysis plan.',
+  });
+}
+
+/**
+ * Build the isomorphic loop error response (mutated cosmetic arguments).
+ */
+export function buildIsomorphicLoopErrorResponse(
+  toolName: string,
+  trip: IsomorphicTrip,
+): { content: Array<{ type: 'text'; text: string }>; isError: true } {
+  return buildGateErrorResponse({
+    error:
+      `Isomorphic call loop detected: tool "${toolName}" has been called ${trip.count} consecutive times ` +
+      `with semantically identical arguments (threshold: ${trip.threshold}). The call was blocked.`,
+    isomorphicLoop: {
+      toolName,
+      consecutiveCount: trip.count,
+      threshold: trip.threshold,
+    },
+    hint:
+      'Trivial modifications to comments, timestamps, or request IDs do not alter the outcome. ' +
+      'Stop repeating this operation and switch to a different analysis strategy.',
+  });
 }
 
 /* ── Doom-loop per-session state ──

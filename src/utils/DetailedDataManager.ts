@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { getArtifactDir } from '@utils/artifacts';
 import { gzip, gunzip, gunzipSync } from 'node:zlib';
 import { promisify } from 'node:util';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { ioLimit } from '@utils/concurrency';
 
 const gzipAsync = promisify(gzip);
@@ -40,6 +40,22 @@ export interface DetailedDataResponse {
   detailId: string;
   hint: string;
   expiresAt: number;
+  contentHash?: string;
+}
+
+export interface SliceOptions {
+  path?: string;
+  offset?: number;
+  limit?: number;
+}
+
+export interface SlicedDataResult<T = unknown> {
+  total: number;
+  offset: number;
+  limit: number;
+  hasMore: boolean;
+  contentHash?: string;
+  data: T;
 }
 
 interface CacheEntry {
@@ -51,6 +67,7 @@ interface CacheEntry {
   size: number;
   persistPath?: string; // Disk path for persisted entries
   compressed?: boolean; // Whether the persisted file is gzip-compressed
+  contentHash?: string; // 16-hex content-addressed digest for CAS deduplication
 }
 
 interface PersistedMetadata {
@@ -59,6 +76,7 @@ interface PersistedMetadata {
   createdAt: number;
   size: number;
   compressed?: boolean;
+  contentHash?: string;
 }
 
 /** Monitoring counters emitted via getStats(). */
@@ -74,8 +92,8 @@ interface PersistenceMetrics {
   evictedByLRUCount: number;
   totalBytesWritten: number;
   totalBytesRead: number;
-  /** Number of persists skipped because the bounded write queue was saturated. */
   persistDeferredCount: number;
+  dedupHitCount: number;
 }
 
 /**
@@ -132,6 +150,8 @@ export class DetailedDataManager {
   private readonly AUTO_EXTEND_ON_ACCESS = true;
   private readonly EXTEND_DURATION = 15 * 60 * 1000;
 
+  private contentHashIndex = new Map<string, string>();
+
   /** Monitoring metrics for observability. */
   private metrics: PersistenceMetrics = {
     diskWriteCount: 0,
@@ -146,6 +166,7 @@ export class DetailedDataManager {
     totalBytesWritten: 0,
     totalBytesRead: 0,
     persistDeferredCount: 0,
+    dedupHitCount: 0,
   };
 
   constructor() {
@@ -173,6 +194,7 @@ export class DetailedDataManager {
       this.cleanupInterval = null;
     }
     this.cache.clear();
+    this.contentHashIndex.clear();
     // Reset singleton so next getInstance() creates a fresh instance with interval
     DetailedDataManager.instance = undefined;
   }
@@ -214,7 +236,11 @@ export class DetailedDataManager {
               `${meta.detailId}${meta.compressed ? '.gz' : '.json'}`,
             ),
             compressed: meta.compressed,
+            contentHash: meta.contentHash,
           });
+          if (meta.contentHash) {
+            this.contentHashIndex.set(meta.contentHash, meta.detailId);
+          }
         }
       }
       if (!this.disposed) logger.info(`Loaded ${this.cache.size} persisted detail entries`);
@@ -239,7 +265,10 @@ export class DetailedDataManager {
     }
 
     if (expired.length > 0) {
-      expired.forEach(([id]) => this.cache.delete(id));
+      expired.forEach(([id, entry]) => {
+        this.cache.delete(id);
+        if (entry.contentHash) this.contentHashIndex.delete(entry.contentHash);
+      });
       await this.discardPersistedEntries(expired.map(([, entry]) => entry));
       if (!this.disposed) logger.info(`Cleaned up ${expired.length} expired detail entries`);
     }
@@ -257,6 +286,8 @@ export class DetailedDataManager {
           expiresAt: entry.expiresAt,
           createdAt: entry.createdAt,
           size: entry.size,
+          compressed: entry.compressed,
+          contentHash: entry.contentHash,
         };
         lines.push(JSON.stringify(meta));
       }
@@ -305,6 +336,11 @@ export class DetailedDataManager {
    * cache entries they describe (a2-03/a3-05).
    */
   private async discardPersistedEntries(entries: CacheEntry[]): Promise<void> {
+    for (const entry of entries) {
+      if (entry.contentHash) {
+        this.contentHashIndex.delete(entry.contentHash);
+      }
+    }
     if (this.disposed || !this.persistenceEnabled) return;
 
     const toUnlink = entries.filter((entry) => entry.persistPath);
@@ -366,21 +402,30 @@ export class DetailedDataManager {
   ): Promise<DetailedDataResponse> {
     const detailId = await this.storeWithSize(data, size, undefined, jsonStr);
     const summary = this.generateSummaryFromJson(data, jsonStr, size);
+    const cached = this.cache.get(detailId);
 
     return {
       summary,
       detailId,
+      contentHash: cached?.contentHash,
       hint:
-        `Data too large. Use get_detailed_data("${detailId}") to retrieve full data, or ` +
-        `get_detailed_data("${detailId}` +
-        `", path="key.subkey") for specific part.`,
+        `Data too large (${(size / 1024).toFixed(1)}KB). Use get_detailed_data("${detailId}", offset=0, limit=20) ` +
+        `for sliced retrieval, or get_detailed_data("${detailId}", path="key.subkey") for specific part.`,
       expiresAt: Date.now() + this.DEFAULT_TTL,
     };
   }
 
-  async store<T>(data: T, customTTL?: number): Promise<string> {
+  async store<T>(
+    data: T,
+    customTTL?: number,
+    options?: { deduplicate?: boolean },
+  ): Promise<string> {
     const { json, size } = this.serializeWithMemo(data);
-    return this.storeWithSize(data, size, customTTL, json);
+    return this.storeWithSize(data, size, customTTL, json, options?.deduplicate === true);
+  }
+
+  async storeDeduped<T>(data: T, customTTL?: number): Promise<string> {
+    return this.store(data, customTTL, { deduplicate: true });
   }
 
   private async storeWithSize(
@@ -388,6 +433,7 @@ export class DetailedDataManager {
     size: number,
     customTTL?: number,
     precomputedJson?: string,
+    deduplicate = false,
   ): Promise<string> {
     if (this.cache.size >= this.MAX_CACHE_SIZE) {
       this.evictLRU();
@@ -413,6 +459,30 @@ export class DetailedDataManager {
       effectiveSize = reserialized.size;
     }
 
+    // CAS Deduplication: check if an identical non-expired payload is already cached
+    const contentHash =
+      jsonForDisk !== undefined
+        ? createHash('sha256').update(jsonForDisk).digest('hex').slice(0, 16)
+        : undefined;
+
+    if (deduplicate && contentHash && this.contentHashIndex.has(contentHash)) {
+      const existingId = this.contentHashIndex.get(contentHash)!;
+      const existingEntry = this.cache.get(existingId);
+      if (existingEntry && existingEntry.expiresAt > Date.now()) {
+        const ttl = customTTL || this.DEFAULT_TTL;
+        existingEntry.expiresAt = Math.max(existingEntry.expiresAt, Date.now() + ttl);
+        existingEntry.lastAccessedAt = Date.now();
+        existingEntry.accessCount++;
+        this.metrics.dedupHitCount++;
+        logger.debug(
+          `[DetailedDataManager] CAS deduplication hit: ${existingId} (hash=${contentHash})`,
+        );
+        return existingId;
+      } else {
+        this.contentHashIndex.delete(contentHash);
+      }
+    }
+
     const detailId = this.generateDetailId();
     const now = Date.now();
     const ttl = customTTL || this.DEFAULT_TTL;
@@ -433,9 +503,13 @@ export class DetailedDataManager {
       size: effectiveSize,
       persistPath,
       compressed: shouldCompress,
+      contentHash,
     };
 
     this.cache.set(detailId, entry);
+    if (contentHash) {
+      this.contentHashIndex.set(contentHash, detailId);
+    }
 
     // Persist to disk asynchronously (with optional gzip compression) behind a
     // bounded concurrency gate: when too many writes are already in flight the
@@ -469,6 +543,7 @@ export class DetailedDataManager {
               createdAt: now,
               size: effectiveSize,
               compressed: shouldCompress,
+              contentHash,
             });
           })
           .catch((err) => {
@@ -579,6 +654,78 @@ export class DetailedDataManager {
     }
 
     return cached.data as T;
+  }
+
+  /**
+   * Retrieve a sliced portion of detailed data (DA slice sampling).
+   * Prevents large arrays or long code strings from overwhelming LLM context windows.
+   */
+  async retrieveSliceAsync<T = unknown>(
+    detailId: string,
+    options?: SliceOptions,
+  ): Promise<SlicedDataResult<T>> {
+    const fullData = await this.retrieveAsync(detailId, options?.path);
+    const cached = this.cache.get(detailId);
+    const contentHash = cached?.contentHash;
+    const offset = Math.max(0, options?.offset ?? 0);
+    const limit = options?.limit !== undefined && options.limit > 0 ? options.limit : undefined;
+
+    if (Array.isArray(fullData)) {
+      const total = fullData.length;
+      const effectiveLimit = limit ?? total;
+      const sliced = fullData.slice(offset, offset + effectiveLimit);
+      return {
+        total,
+        offset,
+        limit: effectiveLimit,
+        hasMore: offset + effectiveLimit < total,
+        contentHash,
+        data: sliced as unknown as T,
+      };
+    }
+
+    if (typeof fullData === 'string') {
+      const total = fullData.length;
+      const effectiveLimit = limit ?? total;
+      const sliced = fullData.slice(offset, offset + effectiveLimit);
+      return {
+        total,
+        offset,
+        limit: effectiveLimit,
+        hasMore: offset + effectiveLimit < total,
+        contentHash,
+        data: sliced as unknown as T,
+      };
+    }
+
+    if (fullData !== null && typeof fullData === 'object') {
+      const keys = Object.keys(fullData);
+      const total = keys.length;
+      const effectiveLimit = limit ?? total;
+      const slicedKeys = keys.slice(offset, offset + effectiveLimit);
+      const rec = fullData as Record<string, unknown>;
+      const slicedObj: Record<string, unknown> = {};
+      for (const k of slicedKeys) {
+        slicedObj[k] = rec[k];
+      }
+      return {
+        total,
+        offset,
+        limit: effectiveLimit,
+        hasMore: offset + effectiveLimit < total,
+        contentHash,
+        data: slicedObj as unknown as T,
+      };
+    }
+
+    return {
+      total: 1,
+      offset: 0,
+      limit: 1,
+      hasMore: false,
+      contentHash,
+      data: fullData as T,
+    };
   }
 
   private async loadPersistedData(detailId: string, cached: CacheEntry): Promise<void> {

@@ -178,12 +178,30 @@ export class TokenBudgetManager {
 
   private calculateSize(data: unknown): number {
     try {
+      // Fast path 0: Plain string input
+      if (typeof data === 'string') {
+        const truncatedLen = Math.min(data.length, this.MAX_ESTIMATION_STRING_LENGTH);
+        return Math.min(
+          Buffer.byteLength(data.slice(0, truncatedLen), 'utf8'),
+          this.MAX_ESTIMATION_BYTES,
+        );
+      }
+
       // Fast path 1: DetailedDataResponse with pre-computed size
       if (this.hasDetailedSummarySize(data)) {
         return Math.min(data.summary.size, this.MAX_ESTIMATION_BYTES);
       }
 
-      // Fast path 2: Common MCP envelope — skip recursive normalization
+      // Fast path 2: Direct pre-measured contentLength attribute
+      if (
+        this.isRecord(data) &&
+        typeof data['contentLength'] === 'number' &&
+        Number.isFinite(data['contentLength'])
+      ) {
+        return Math.min(data['contentLength'] as number, this.MAX_ESTIMATION_BYTES);
+      }
+
+      // Fast path 3: Common MCP envelope — skip recursive normalization
       const mcpSize = this.tryEstimateMcpEnvelope(data);
       if (mcpSize !== null) return mcpSize;
 

@@ -21,6 +21,27 @@ export class DetailedDataHandlers {
     try {
       const detailId = argString(args, 'detailId', '');
       const path = argString(args, 'path');
+      const offset = typeof args.offset === 'number' ? args.offset : undefined;
+      const limit = typeof args.limit === 'number' ? args.limit : undefined;
+
+      if (offset !== undefined || limit !== undefined) {
+        const slice = await this.deps.detailedDataManager.retrieveSliceAsync(detailId, {
+          path,
+          offset,
+          limit,
+        });
+
+        return R.ok().build({
+          detailId,
+          path: path || 'full',
+          offset: slice.offset,
+          limit: slice.limit,
+          total: slice.total,
+          hasMore: slice.hasMore,
+          contentHash: slice.contentHash,
+          data: slice.data,
+        });
+      }
 
       const data = await this.deps.detailedDataManager.retrieveAsync(detailId, path);
 

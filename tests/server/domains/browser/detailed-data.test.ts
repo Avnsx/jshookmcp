@@ -12,6 +12,7 @@ import { MAX_OFFLOADED_READ_BYTES, DETAILED_DATA_DEFAULT_TTL_MS } from '@src/con
 describe('DetailedDataHandlers', () => {
   const detailedDataManager = {
     retrieveAsync: vi.fn(),
+    retrieveSliceAsync: vi.fn(),
   } as any;
 
   let handlers: DetailedDataHandlers;
@@ -19,6 +20,38 @@ describe('DetailedDataHandlers', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     handlers = new DetailedDataHandlers({ detailedDataManager });
+  });
+
+  it('slices data when offset or limit is provided', async () => {
+    detailedDataManager.retrieveSliceAsync.mockResolvedValue({
+      total: 100,
+      offset: 10,
+      limit: 5,
+      hasMore: true,
+      contentHash: 'abc123',
+      data: ['item_10', 'item_11', 'item_12', 'item_13', 'item_14'],
+    });
+
+    const body = parseJson<any>(
+      await handlers.handleGetDetailedData({
+        detailId: 'detail-slice',
+        offset: 10,
+        limit: 5,
+      }),
+    );
+
+    expect(detailedDataManager.retrieveSliceAsync).toHaveBeenCalledWith('detail-slice', {
+      path: undefined,
+      offset: 10,
+      limit: 5,
+    });
+    expect(body.success).toBe(true);
+    expect(body.total).toBe(100);
+    expect(body.offset).toBe(10);
+    expect(body.limit).toBe(5);
+    expect(body.hasMore).toBe(true);
+    expect(body.contentHash).toBe('abc123');
+    expect(body.data).toHaveLength(5);
   });
 
   it('returns detailed data and defaults path to full', async () => {

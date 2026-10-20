@@ -12,11 +12,16 @@
  *   cache.get('a');       // promotes 'a' to most-recently-used
  *   cache.peek('a');      // read without promoting
  */
+export type EvictionHandler<K, V> = (key: K, value: V) => void;
+
 export class LruMap<K, V> extends Map<K, V> {
   private readonly capacity: number;
-  constructor(capacity: number) {
+  private readonly onEvict?: EvictionHandler<K, V>;
+
+  constructor(capacity: number, onEvict?: EvictionHandler<K, V>) {
     super();
     this.capacity = capacity;
+    this.onEvict = onEvict;
     if (!Number.isInteger(capacity) || capacity < 1) {
       throw new RangeError('LruMap capacity must be an integer >= 1');
     }
@@ -41,8 +46,14 @@ export class LruMap<K, V> extends Map<K, V> {
     super.set(key, value);
     if (super.size > this.capacity) {
       // Map keys iterate in insertion order, so the head is the LRU entry.
-      const oldest = super.keys().next().value;
-      if (oldest !== undefined) super.delete(oldest);
+      const oldestKey = super.keys().next().value;
+      if (oldestKey !== undefined) {
+        const oldestValue = super.get(oldestKey);
+        super.delete(oldestKey);
+        if (this.onEvict && oldestValue !== undefined) {
+          this.onEvict(oldestKey, oldestValue);
+        }
+      }
     }
     return this;
   }
