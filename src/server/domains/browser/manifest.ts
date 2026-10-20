@@ -123,6 +123,7 @@ async function ensure(ctx: MCPServerContext): Promise<H> {
       getDomainInstance?.<BrowserSessionCoordinator>('browserSessionCoordinator') ??
       (compatCtx.browserSessionCoordinator as BrowserSessionCoordinator | undefined) ??
       new BrowserSessionCoordinator(() => ctx.collector, {
+        policy: schedulerConfig?.browserSessionSchedulerPolicy,
         maxPending: schedulerConfig?.browserSessionQueueMaxPending,
         maxPendingPerSession: schedulerConfig?.browserSessionQueueMaxPendingPerSession,
         waitTimeoutMs: schedulerConfig?.browserSessionQueueWaitTimeoutMs,

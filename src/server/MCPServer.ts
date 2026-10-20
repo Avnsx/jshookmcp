@@ -556,6 +556,7 @@ export class MCPServer implements MCPServerContext {
         ),
     );
     const browserSessionCoordinator = new BrowserSessionCoordinator(() => this.collector, {
+      policy: config.mcp.browserSessionSchedulerPolicy,
       maxPending: config.mcp.browserSessionQueueMaxPending,
       maxPendingPerSession: config.mcp.browserSessionQueueMaxPendingPerSession,
       waitTimeoutMs: config.mcp.browserSessionQueueWaitTimeoutMs,

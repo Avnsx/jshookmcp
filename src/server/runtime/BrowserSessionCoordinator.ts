@@ -24,6 +24,7 @@ interface BrowserSessionEntry extends BrowserSessionSnapshot {
 }
 
 export interface BrowserSessionSchedulerOptions {
+  policy?: 'drr-aging' | 'eevdf';
   maxPending: number;
   maxPendingPerSession: number;
   waitTimeoutMs: number;
@@ -32,6 +33,7 @@ export interface BrowserSessionSchedulerOptions {
   expectedConcurrency: number;
   reservedPendingPerSession: number;
   costEwmaAlpha: number;
+  maxLagMs?: number;
 }
 
 export interface BrowserSessionLifecycleOptions {
@@ -41,7 +43,8 @@ export interface BrowserSessionLifecycleOptions {
 }
 
 export interface BrowserSessionQueueStats extends BrowserSessionSchedulerOptions {
-  policy: 'drr-aging';
+  policy: 'drr-aging' | 'eevdf';
+  systemVirtualTimeMs?: number;
   pending: number;
   pendingSessions: number;
   readySessions: number;
@@ -64,6 +67,7 @@ export interface BrowserSessionQueueStats extends BrowserSessionSchedulerOptions
 export interface BrowserSessionExecutionOptions {
   toolName?: string;
   costHintMs?: number;
+  weight?: number;
   signal?: AbortSignal;
 }
 
@@ -79,6 +83,7 @@ interface PendingExecution {
   reject: (reason: unknown) => void;
   toolName: string | null;
   estimatedCostMs: number;
+  weight: number;
   enqueuedAt: number;
   deadlineAt: number;
   sequence: number;
@@ -101,6 +106,8 @@ interface SessionScheduleState {
   sessionId: string;
   deficitMs: number;
   globalCreditBaseMs: number;
+  vruntimeMs: number;
+  weight: number;
   ready: boolean;
   previousReady: SessionScheduleState | null;
   nextReady: SessionScheduleState | null;
@@ -148,6 +155,7 @@ export class BrowserSessionQueueError extends Error {
 
 const DEFAULT_SESSION_ID = 'default';
 const DEFAULT_SCHEDULER_OPTIONS: BrowserSessionSchedulerOptions = {
+  policy: 'eevdf',
   maxPending: 256,
   maxPendingPerSession: 16,
   waitTimeoutMs: 180_000,
@@ -156,6 +164,7 @@ const DEFAULT_SCHEDULER_OPTIONS: BrowserSessionSchedulerOptions = {
   expectedConcurrency: 10,
   reservedPendingPerSession: 1,
   costEwmaAlpha: 0.2,
+  maxLagMs: 500,
 };
 const DEFAULT_COST_MS = 250;
 const MIN_COST_MS = 1;
@@ -270,6 +279,7 @@ export class BrowserSessionCoordinator {
   private readyTail: SessionScheduleState | null = null;
   private readySessionCount = 0;
   private globalCreditMs = 0;
+  private systemVirtualTimeMs = 0;
   private deadlineTimer: NodeJS.Timeout | null = null;
   private deadlineTimerDueAt: number | null = null;
   private lastActiveSessionId: string | null = null;
@@ -294,6 +304,7 @@ export class BrowserSessionCoordinator {
     this.now = now;
     const maxPending = positiveInteger(options.maxPending, DEFAULT_SCHEDULER_OPTIONS.maxPending);
     this.schedulerOptions = {
+      policy: options.policy ?? DEFAULT_SCHEDULER_OPTIONS.policy,
       maxPending,
       maxPendingPerSession: Math.min(
         positiveInteger(
@@ -320,6 +331,7 @@ export class BrowserSessionCoordinator {
         options.costEwmaAlpha,
         DEFAULT_SCHEDULER_OPTIONS.costEwmaAlpha,
       ),
+      maxLagMs: positiveInteger(options.maxLagMs, DEFAULT_SCHEDULER_OPTIONS.maxLagMs ?? 500),
     };
     this.lifecycle = {
       maxSessions: positiveInteger(options.maxSessions, BROWSER_SESSION_MAX_SESSIONS),
@@ -483,7 +495,11 @@ export class BrowserSessionCoordinator {
     const oldestPendingWaitMs = oldestPending ? now - oldestPending.enqueuedAt : 0;
     return {
       ...this.schedulerOptions,
-      policy: 'drr-aging',
+      policy: this.schedulerOptions.policy ?? 'drr-aging',
+      systemVirtualTimeMs:
+        this.schedulerOptions.policy === 'eevdf'
+          ? roundMetric(this.systemVirtualTimeMs)
+          : undefined,
       pending: this.pendingExecutionCount,
       pendingSessions: this.pendingBySession.size,
       readySessions: this.readySessionCount,
@@ -641,6 +657,15 @@ export class BrowserSessionCoordinator {
       );
     }
 
+    const weight =
+      typeof options.weight === 'number' && Number.isFinite(options.weight) && options.weight > 0
+        ? options.weight
+        : 1.0;
+    const scheduleState = this.getScheduleState(normalized);
+    if (weight !== scheduleState.weight) {
+      scheduleState.weight = weight;
+    }
+
     return await new Promise<T>((resolve, reject) => {
       const enqueuedAt = this.now();
       const task: PendingExecution = {
@@ -650,6 +675,7 @@ export class BrowserSessionCoordinator {
         reject,
         toolName: options.toolName?.trim() || null,
         estimatedCostMs: this.estimateCost(options.toolName, options.costHintMs),
+        weight,
         enqueuedAt,
         deadlineAt: enqueuedAt + this.schedulerOptions.waitTimeoutMs,
         sequence: this.nextSequence++,
@@ -706,12 +732,17 @@ export class BrowserSessionCoordinator {
         } finally {
           const serviceMs = Math.max(0, this.now() - serviceStartedAt);
           const chargedMs = clamp(serviceMs, MIN_COST_MS, MAX_COST_MS);
-          this.materializeGlobalCredit(scheduleState);
-          scheduleState.deficitMs = clamp(
-            scheduleState.deficitMs - chargedMs,
-            -MAX_COST_MS,
-            MAX_COST_MS + this.schedulerOptions.quantumMs,
-          );
+          if (this.schedulerOptions.policy === 'eevdf') {
+            scheduleState.vruntimeMs += chargedMs / (scheduleState.weight || 1.0);
+            this.systemVirtualTimeMs = Math.max(this.systemVirtualTimeMs, scheduleState.vruntimeMs);
+          } else {
+            this.materializeGlobalCredit(scheduleState);
+            scheduleState.deficitMs = clamp(
+              scheduleState.deficitMs - chargedMs,
+              -MAX_COST_MS,
+              MAX_COST_MS + this.schedulerOptions.quantumMs,
+            );
+          }
           this.totalServiceMs += serviceMs;
           if (task.toolName) this.updateToolCost(task.toolName, chargedMs);
           task.state = 'settled';
@@ -720,7 +751,9 @@ export class BrowserSessionCoordinator {
           if (remaining && remaining.length > 0) {
             this.enqueueReadySession(sessionId);
           } else {
-            scheduleState.deficitMs = Math.min(0, scheduleState.deficitMs);
+            if (this.schedulerOptions.policy !== 'eevdf') {
+              scheduleState.deficitMs = Math.min(0, scheduleState.deficitMs);
+            }
           }
         }
 
@@ -764,7 +797,7 @@ export class BrowserSessionCoordinator {
 
     const now = this.now();
     // Aging is an absolute starvation guard. It deliberately overrides deficit
-    // accounting only at safe tool boundaries; active CDP work is never preempted.
+    // or deadline accounting only at safe tool boundaries; active CDP work is never preempted.
     const oldest = this.agingHeap.peek();
     if (oldest && now - oldest.enqueuedAt >= this.schedulerOptions.agingMs) {
       const state = this.scheduleBySession.get(oldest.sessionId);
@@ -774,6 +807,56 @@ export class BrowserSessionCoordinator {
       }
     }
 
+    if (this.schedulerOptions.policy === 'eevdf') {
+      return this.selectReadySessionEevdf();
+    }
+    return this.selectReadySessionDrr();
+  }
+
+  private selectReadySessionEevdf(): { sessionId: string; aged: boolean } | null {
+    const activeSessions: { state: SessionScheduleState; task: PendingExecution }[] = [];
+    let curr = this.readyHead;
+    while (curr) {
+      const next = curr.nextReady;
+      const task = this.pendingBySession.get(curr.sessionId)?.head;
+      if (!task) {
+        this.removeReadyState(curr);
+      } else {
+        activeSessions.push({ state: curr, task });
+      }
+      curr = next;
+    }
+
+    if (activeSessions.length === 0) return null;
+
+    const minActiveVruntime = Math.min(...activeSessions.map((s) => s.state.vruntimeMs));
+    this.systemVirtualTimeMs = Math.max(this.systemVirtualTimeMs, minActiveVruntime);
+
+    const eligible = activeSessions.filter((s) => s.state.vruntimeMs <= this.systemVirtualTimeMs);
+    const candidatePool = eligible.length > 0 ? eligible : activeSessions;
+
+    let bestCandidate = candidatePool[0]!;
+    let bestDeadline =
+      bestCandidate.state.vruntimeMs +
+      bestCandidate.task.estimatedCostMs / (bestCandidate.state.weight || 1.0);
+
+    for (let i = 1; i < candidatePool.length; i++) {
+      const c = candidatePool[i]!;
+      const d = c.state.vruntimeMs + c.task.estimatedCostMs / (c.state.weight || 1.0);
+      if (
+        d < bestDeadline ||
+        (d === bestDeadline && c.task.sequence < bestCandidate.task.sequence)
+      ) {
+        bestCandidate = c;
+        bestDeadline = d;
+      }
+    }
+
+    this.removeReadyState(bestCandidate.state);
+    return { sessionId: bestCandidate.state.sessionId, aged: false };
+  }
+
+  private selectReadySessionDrr(): { sessionId: string; aged: boolean } | null {
     // DRR accounts in milliseconds rather than request count. Bulk-crediting
     // advances a shared virtual credit instead of touching every flow twice.
     while (this.readySessionCount > 0) {
@@ -822,6 +905,13 @@ export class BrowserSessionCoordinator {
     const state = this.getScheduleState(sessionId);
     if (state.ready) return;
 
+    if (this.schedulerOptions.policy === 'eevdf') {
+      const maxLag = this.schedulerOptions.maxLagMs ?? 500;
+      if (this.systemVirtualTimeMs - state.vruntimeMs > maxLag) {
+        state.vruntimeMs = this.systemVirtualTimeMs - maxLag;
+      }
+    }
+
     state.ready = true;
     state.globalCreditBaseMs = this.globalCreditMs;
     state.previousReady = this.readyTail;
@@ -866,6 +956,8 @@ export class BrowserSessionCoordinator {
         sessionId,
         deficitMs: 0,
         globalCreditBaseMs: this.globalCreditMs,
+        vruntimeMs: this.systemVirtualTimeMs,
+        weight: 1.0,
         ready: false,
         previousReady: null,
         nextReady: null,

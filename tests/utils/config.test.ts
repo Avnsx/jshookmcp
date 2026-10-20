@@ -175,6 +175,7 @@ describe('config utilities', () => {
   });
 
   it('reads browser session scheduler limits from environment', async () => {
+    process.env.MCP_BROWSER_SESSION_SCHEDULER_POLICY = 'drr-aging';
     process.env.MCP_BROWSER_SESSION_QUEUE_MAX_PENDING = '80';
     process.env.MCP_BROWSER_SESSION_QUEUE_MAX_PENDING_PER_SESSION = '8';
     process.env.MCP_BROWSER_SESSION_QUEUE_WAIT_TIMEOUT_MS = '12000';
@@ -186,6 +187,7 @@ describe('config utilities', () => {
 
     const { getConfig } = await import('@utils/config');
     expect(getConfig().mcp).toMatchObject({
+      browserSessionSchedulerPolicy: 'drr-aging',
       browserSessionQueueMaxPending: 80,
       browserSessionQueueMaxPendingPerSession: 8,
       browserSessionQueueWaitTimeoutMs: 12_000,

@@ -184,6 +184,7 @@ export interface MCPConfig {
   version: string;
   toolProfile: 'search' | 'workflow' | 'full';
   toolDomains: string[];
+  browserSessionSchedulerPolicy: 'eevdf' | 'drr-aging';
   browserSessionQueueMaxPending: number;
   browserSessionQueueMaxPendingPerSession: number;
   browserSessionQueueWaitTimeoutMs: number;
@@ -238,6 +239,8 @@ export interface SearchConfig {
   vectorModelId?: string;
   vectorCosineWeight?: number;
   vectorDynamicWeight?: boolean;
+  /** Bound feedback actions applied per vector-weight update. */
+  feedbackFoldSize?: number;
 }
 
 export interface SearchQueryCategoryProfileConfig {

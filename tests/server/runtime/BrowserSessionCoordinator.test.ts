@@ -322,6 +322,7 @@ describe('BrowserSessionCoordinator', () => {
     const coordinator = new BrowserSessionCoordinator(
       () => null,
       {
+        policy: 'drr-aging',
         maxPending: 64,
         maxPendingPerSession: 32,
         waitTimeoutMs: 5_000,

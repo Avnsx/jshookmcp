@@ -55,6 +55,7 @@ const CONFIG_DEFAULTS = {
   mcp: {
     name: 'jshookmcp',
     version: getPackageVersion(import.meta.url),
+    browserSessionSchedulerPolicy: 'eevdf' as const,
     browserSessionQueueMaxPending: 256,
     browserSessionQueueMaxPendingPerSession: 16,
     browserSessionQueueWaitTimeoutMs: 180_000,
@@ -314,6 +315,10 @@ const ConfigSchema = z.object({
     z.enum(['search', 'workflow', 'full']),
   ),
   MCP_TOOL_DOMAINS: z.string().optional().default(''),
+  MCP_BROWSER_SESSION_SCHEDULER_POLICY: z
+    .enum(['eevdf', 'drr-aging'])
+    .optional()
+    .default(CONFIG_DEFAULTS.mcp.browserSessionSchedulerPolicy),
   MCP_BROWSER_SESSION_QUEUE_MAX_PENDING: envInt(
     CONFIG_DEFAULTS.mcp.browserSessionQueueMaxPending,
   ).pipe(z.number().min(1).max(100_000)),
@@ -1059,6 +1064,7 @@ export function getConfig(): Config {
       version: env.MCP_SERVER_VERSION,
       toolProfile: env.MCP_TOOL_PROFILE,
       toolDomains: parseCsvList(env.MCP_TOOL_DOMAINS).map((domain) => domain.toLowerCase()),
+      browserSessionSchedulerPolicy: env.MCP_BROWSER_SESSION_SCHEDULER_POLICY,
       browserSessionQueueMaxPending: env.MCP_BROWSER_SESSION_QUEUE_MAX_PENDING,
       browserSessionQueueMaxPendingPerSession:
         env.MCP_BROWSER_SESSION_QUEUE_MAX_PENDING_PER_SESSION,
