@@ -5,7 +5,6 @@ import type { SearchConfig } from '@internal-types/config';
 import {
   SEARCH_BM25_B,
   SEARCH_BM25_K1,
-  SEARCH_CACHE_VECTOR_WEIGHT_TOLERANCE,
   SEARCH_COVERAGE_PRECISION_FACTOR,
   SEARCH_DESC_TOKEN_WEIGHT,
   SEARCH_DOMAIN_TOKEN_WEIGHT,
@@ -57,6 +56,13 @@ import {
   rankByMap,
   rankByScores,
 } from './ToolSearchEngine.helpers';
+import {
+  buildSearchCacheKey,
+  capturePositiveScores,
+  materializeScores,
+  type SearchWitness,
+} from './SearchStatement';
+import { ToolMerkleTree, type ToolStateWitness } from './ToolMerkleWitness';
 
 // ── public types ──
 
@@ -86,30 +92,16 @@ interface ToolDocument {
 }
 
 /**
- * Cached search result with provenance: the vector weight at cache time and
- * a timestamp used to decide whether to apply recency boost on top.
+ * Pre-adjust scores for one query. Recency, tier, explicit mention, and the
+ * re-ranker are replayed on hit so they can change without a new BM25 pass.
+ * `feedbackEpoch` invalidates full-path entries when a fold moves the vector
+ * weight. Quick-path entries do not read that weight.
  */
 interface CachedSearchEntry {
-  results: ToolSearchResult[];
-  vectorWeightAtCache: number;
-  cachedAtMs: number;
-}
-
-function buildSearchCacheKey(
-  query: string,
-  topK: number,
-  visibleDomains?: ReadonlySet<string>,
-  extensionEtag?: string,
-): string {
-  // Normalise casing / whitespace so queries that differ only in
-  // capitalisation or surrounding spaces hit the same cache entry.
-  const base = `${query.toLowerCase().trim()}\0${topK}`;
-  const domains =
-    !visibleDomains || visibleDomains.size === 0
-      ? ''
-      : `\0${[...visibleDomains].toSorted().join('|')}`;
-  const etag = extensionEtag ? `\0${extensionEtag}` : '';
-  return `${base}${domains}${etag}`;
+  kind: 'quick' | 'full';
+  feedbackEpoch: number;
+  preAdjust: Array<[number, number]>;
+  vectorRanking: Array<[string, number]> | null;
 }
 
 // ── LRU Cache ──
@@ -172,12 +164,12 @@ export class ToolSearchEngine {
   /** Prefix-group affinity graph: docIndex → neighbor edges. */
   private readonly affinityGraph: ReadonlyMap<number, ReadonlyArray<AffinityEdge>>;
   /**
-   * Query result LRU cache (§4.3 CSAPC). Entries are versioned by the live
-   * vector weight; stale entries are dropped only when the weight drifted
-   * beyond SEARCH_CACHE_VECTOR_WEIGHT_TOLERANCE, avoiding the full-flush
-   * behavior of the previous epoch-bump approach.
+   * Query result LRU cache. Full-path entries are versioned by the feedback
+   * fold epoch. Recency and tier are replayed on hit.
    */
   private readonly queryCache: LRUCache<string, CachedSearchEntry>;
+  /** Evidence from the search the caller just saw. Tool-call learning reads this. */
+  private lastWitness: SearchWitness | null = null;
   /** Trigram fuzzy matching index over tool names. */
   private readonly trigramIndex: TrigramIndex;
 
@@ -202,6 +194,11 @@ export class ToolSearchEngine {
   private readonly intentBoost: IntentBoostImpl;
   private readonly reRanker: ReRanker;
   private readonly qualityTracker = new SearchQualityTracker();
+
+  // ── Lookup tables & Cryptographic State (Mina / PLONK inspired) ──
+  private readonly idfLookupTable: Float64Array;
+  private readonly docNormTable: Float64Array;
+  private readonly merkleTree: ToolMerkleTree;
 
   constructor(
     tools?: Tool[],
@@ -308,6 +305,21 @@ export class ToolSearchEngine {
     this.avgDocLength = this.docCount > 0 ? totalLength / this.docCount : 1;
     this.sortedKeys = [...this.invertedIndex.keys()].toSorted();
 
+    // ── Lookup tables (PLONK-style lookup argument precomputation) ──
+    this.idfLookupTable = new Float64Array(this.docCount + 1);
+    for (let df = 0; df <= this.docCount; df++) {
+      this.idfLookupTable[df] = Math.log((this.docCount - df + 0.5) / (df + 0.5) + 1);
+    }
+
+    this.docNormTable = new Float64Array(this.docCount);
+    const b = SEARCH_BM25_B;
+    for (let i = 0; i < this.docCount; i++) {
+      this.docNormTable[i] = 1 - b + b * (this.docs[i]!.length / this.avgDocLength);
+    }
+
+    // ── Cryptographic State Commitment (Mina-inspired Merkle Tree) ──
+    this.merkleTree = new ToolMerkleTree(this.docs);
+
     // ── Re-ranker: build domain keywords from tool metadata ──
     this.reRanker = new ReRanker();
     this.reRanker.buildFromTools(
@@ -344,7 +356,7 @@ export class ToolSearchEngine {
     if (inVocab.length < 3) return queryTokens;
     const scored = inVocab.map((t) => {
       const df = this.invertedIndex.get(t)!.length;
-      const idf = Math.log((this.docCount - df + 0.5) / (df + 0.5) + 1);
+      const idf = this.idfLookupTable[df] ?? 0;
       return { token: t, idf };
     });
     scored.sort((a, b) => b.idf - a.idf);
@@ -508,55 +520,57 @@ export class ToolSearchEngine {
       return [];
     }
 
-    // ── Query result cache (§4.3 CSAPC) ──
-    // Checked before the self-RAG quick path so simple queries (exact tool
-    // names, single tokens) also benefit — they previously bypassed the cache.
-    // A cached entry stays valid while the live vector weight drifts within
-    // SEARCH_CACHE_VECTOR_WEIGHT_TOLERANCE of the weight recorded at insert
-    // time; this avoids the full-flush behavior of an epoch bump.
-    const cacheKey = buildSearchCacheKey(query, topK, visibleDomains, this.extensionEtag);
+    // Cache key is the baked statement only. topK, profile, and visible
+    // domains are replayed from the stored pre-adjust scores.
+    const cacheKey = buildSearchCacheKey({ query, extensionEtag: this.extensionEtag });
     const cached = this.queryCache.get(cacheKey);
     if (cached && this.isCachedEntryFresh(cached)) {
-      const active = activeToolNames ?? new Set<string>();
-      telemetrySpan.end({
-        'search.cache_hit': true,
-        'search.result_count': cached.results.length,
-        'search.latency_ms': Math.round(performance.now() - searchStartTime),
-      });
-      instrumentation.emitMetric(MetricNames.searchQueriesTotal, 1, 'counter', {
-        outcome: 'cache_hit',
-      });
-      return cached.results.map((r) => ({ ...r, isActive: active.has(r.name) }));
-    }
-
-    // ── Self-RAG quick path: skip expensive signals for simple queries ──
-    if (SEARCH_SELF_RAG_ENABLED && this.isSimpleQuery(query, queryTokens)) {
-      const quickStartMs = performance.now();
-      const quickResults = this.quickPathSearch(
+      const results = this.replayCached(
+        cached,
         query,
-        queryTokens,
         topK,
         activeToolNames,
         visibleDomains,
         profile,
       );
-      // Quick-path results were previously invisible to the quality tracker
-      // and the cache: simple queries — the highest-hit-rate class — never
-      // showed up in MRR / latency metrics. Record and cache them like
-      // full-path results. The vector signal never participates in the quick
-      // path, so clear any stale ranking from a prior full-path query —
-      // otherwise the next tool-call feedback would learn from it.
+      telemetrySpan.end({
+        'search.cache_hit': true,
+        'search.result_count': results.length,
+        'search.latency_ms': Math.round(performance.now() - searchStartTime),
+      });
+      instrumentation.emitMetric(MetricNames.searchQueriesTotal, 1, 'counter', {
+        outcome: 'cache_hit',
+      });
+      return results;
+    }
+
+    // Exact tool names skip RRF and embeddings. A single token does not:
+    // intent and affinity still have to run.
+    if (SEARCH_SELF_RAG_ENABLED && this.isExactNameQuery(query)) {
+      const quickStartMs = performance.now();
+      const scores = this.quickPathSearch(query, queryTokens);
+      const preAdjust = capturePositiveScores(scores);
+      const quickResults = this.projectScores(
+        scores,
+        'quick',
+        query,
+        topK,
+        activeToolNames,
+        visibleDomains,
+        profile,
+        null,
+      );
+      // The vector signal never participates here. Clear the unbound slot so
+      // a direct tracker read cannot learn from the previous full-path search.
       this.feedbackTracker.recordVectorRanking(null);
-      this.qualityTracker.recordSearch(
+      const searchId = this.qualityTracker.recordSearch(
         query,
         quickResults.map((r) => r.name),
         quickResults.map((r) => r.score),
         performance.now() - quickStartMs,
-        // Quick-path queries bypass the ranking pipeline by construction:
-        // exact/prefix matches are always confident, so no raw BM25 score is
-        // captured and the vector signal never participates.
         { vectorParticipated: false },
       );
+      this.rememberWitness(searchId, quickResults, null);
       const quickLatencyMs = Math.round(performance.now() - searchStartTime);
       telemetrySpan.end({
         'search.quick_path': true,
@@ -569,11 +583,7 @@ export class ToolSearchEngine {
       instrumentation.emitMetric(MetricNames.searchLatencyMs, quickLatencyMs, 'histogram', {
         outcome: 'quick_path',
       });
-      this.queryCache.set(cacheKey, {
-        results: quickResults,
-        vectorWeightAtCache: this.feedbackTracker.getVectorWeight(),
-        cachedAtMs: Date.now(),
-      });
+      this.writeCache(cacheKey, 'quick', preAdjust, null);
       return quickResults;
     }
 
@@ -607,7 +617,7 @@ export class ToolSearchEngine {
 
     // ── RRF multi-signal fusion (replaces multiplicative TF-IDF boost) ──
     // Combine BM25 (already in scores), TF-IDF cosine, trigram, and vector signals
-    const { topBm25Score, vectorParticipated } = await this.applyRRFFusion(
+    const { topBm25Score, vectorParticipated, vectorRanking } = await this.applyRRFFusion(
       queryTokens,
       query,
       scores,
@@ -629,41 +639,18 @@ export class ToolSearchEngine {
 
     // ── Graph expansion: affinity + domain hub (§4.1.4) ──
     this.applyGraphExpansion(scores);
-
-    // ── Recency / frequency boost ──
-    this.applyRecencyBoost(scores);
-
-    // ── Profile tier penalty ──
-    // Downweight (do NOT filter) tools whose domain is not in the caller's
-    // active tier. Keeping them visible lets the LLM discover higher-tier
-    // capabilities when lexical evidence is strong, but prevents them from
-    // crowding the top of workflow/search tier results.
-    this.applyTierPenalty(scores, visibleDomains, profile);
-    this.promoteExplicitMention(scores, explicitToolMention);
-
-    let results = this.collectRankedResults(scores, activeToolNames, topK);
-
-    // ── Re-ranker: rule-based precision re-ranking ──
-    if (results.length > 1) {
-      const reRankInputs: ReRankInput[] = results.map((r) => ({
-        toolName: r.name,
-        score: r.score,
-        domain: r.domain ?? '',
-        description: this.docs[this.docNameIndex.get(r.name) ?? 0]?.description ?? '',
-      }));
-      const reRanked = this.reRanker.reRank(query, reRankInputs, topK);
-      const rankMap = new Map(reRanked.map((rr, idx) => [rr.toolName, idx]));
-      results = results
-        .slice()
-        .toSorted((a, b) => (rankMap.get(a.name) ?? 0) - (rankMap.get(b.name) ?? 0));
-    }
-
-    // ── Cache store (value-versioned) ──
-    this.queryCache.set(cacheKey, {
-      results,
-      vectorWeightAtCache: this.feedbackTracker.getVectorWeight(),
-      cachedAtMs: Date.now(),
-    });
+    const preAdjust = capturePositiveScores(scores);
+    const results = this.projectScores(
+      scores,
+      'full',
+      query,
+      topK,
+      activeToolNames,
+      visibleDomains,
+      profile,
+      explicitToolMention,
+    );
+    this.writeCache(cacheKey, 'full', preAdjust, vectorRanking);
 
     // ── Search quality tracking ──
     const latencyMs = performance.now() - searchStartTime;
@@ -682,56 +669,118 @@ export class ToolSearchEngine {
     instrumentation.emitMetric(MetricNames.searchLatencyMs, Math.round(latencyMs), 'histogram', {
       outcome: vectorParticipated ? 'full_path_vector' : 'full_path_lexical',
     });
-    this.qualityTracker.recordSearch(
+    const searchId = this.qualityTracker.recordSearch(
       query,
       results.map((r) => r.name),
       results.map((r) => r.score),
       latencyMs,
       { bm25TopScore: topBm25Score, vectorParticipated },
     );
+    this.rememberWitness(searchId, results, vectorRanking);
 
     return results;
   }
 
-  /**
-   * Decide whether a cached entry is still usable. Entries drift out of date
-   * primarily because the adaptive vector weight moved; we tolerate a small
-   * delta to avoid flushing on every feedback event.
-   */
+  /** Full-path entries die when a feedback fold moves the vector weight. */
   private isCachedEntryFresh(entry: CachedSearchEntry): boolean {
-    const currentWeight = this.feedbackTracker.getVectorWeight();
-    return (
-      Math.abs(currentWeight - entry.vectorWeightAtCache) <= SEARCH_CACHE_VECTOR_WEIGHT_TOLERANCE
-    );
+    if (entry.kind === 'quick') return true;
+    return entry.feedbackEpoch === this.feedbackTracker.getFeedbackEpoch();
   }
 
-  /**
-   * Self-RAG quick path: determine if the query is simple enough to bypass
-   * expensive signals (embedding, synonym expansion, RRF fusion).
-   * Triggers on exact tool name matches and single-token queries.
-   */
-  private isSimpleQuery(rawQuery: string, queryTokens: string[]): boolean {
-    const normalised = rawQuery.toLowerCase().replace(/[\s-]+/g, '_');
-
-    if (this.docNameIndex.has(normalised)) return true;
-
-    if (queryTokens.length === 1) return true;
-
-    return false;
-  }
-
-  /**
-   * Fast search path: BM25 + trigram only, skipping embedding/RRF/synonym.
-   * Used for simple queries identified by isSimpleQuery().
-   */
-  private quickPathSearch(
+  private replayCached(
+    entry: CachedSearchEntry,
     query: string,
-    queryTokens: string[],
     topK: number,
-    activeToolNames?: ReadonlySet<string>,
-    visibleDomains?: ReadonlySet<string>,
-    profile?: ToolProfile,
+    activeToolNames: ReadonlySet<string> | undefined,
+    visibleDomains: ReadonlySet<string> | undefined,
+    profile: ToolProfile | undefined,
   ): ToolSearchResult[] {
+    const scores = materializeScores(entry.preAdjust, this.docCount);
+    const explicit = entry.kind === 'full' ? this.findExplicitToolMention(query) : null;
+    const results = this.projectScores(
+      scores,
+      entry.kind,
+      query,
+      topK,
+      activeToolNames,
+      visibleDomains,
+      profile,
+      explicit,
+    );
+    const vectorRanking = entry.vectorRanking ? new Map(entry.vectorRanking) : null;
+    this.rememberWitness(`cache:${entry.kind}`, results, vectorRanking);
+    return results;
+  }
+
+  private projectScores(
+    scores: Float64Array,
+    kind: 'quick' | 'full',
+    query: string,
+    topK: number,
+    activeToolNames: ReadonlySet<string> | undefined,
+    visibleDomains: ReadonlySet<string> | undefined,
+    profile: ToolProfile | undefined,
+    explicitToolMention: string | null,
+  ): ToolSearchResult[] {
+    if (kind === 'full') this.applyRecencyBoost(scores);
+    this.applyTierPenalty(scores, visibleDomains, profile);
+    if (kind === 'full') this.promoteExplicitMention(scores, explicitToolMention);
+    const ranked = this.collectRankedResults(scores, activeToolNames, topK);
+    return kind === 'full' ? this.rerankResults(query, ranked) : ranked;
+  }
+
+  private rerankResults(query: string, results: ToolSearchResult[]): ToolSearchResult[] {
+    if (results.length <= 1) return results;
+    const reRankInputs: ReRankInput[] = results.map((result) => ({
+      toolName: result.name,
+      score: result.score,
+      domain: result.domain ?? '',
+      description: this.docs[this.docNameIndex.get(result.name) ?? 0]?.description ?? '',
+    }));
+    const reRanked = this.reRanker.reRank(query, reRankInputs, results.length);
+    const rankMap = new Map(reRanked.map((item, index) => [item.toolName, index]));
+    return results
+      .slice()
+      .toSorted((a, b) => (rankMap.get(a.name) ?? 0) - (rankMap.get(b.name) ?? 0));
+  }
+
+  private writeCache(
+    cacheKey: string,
+    kind: 'quick' | 'full',
+    preAdjust: Array<[number, number]>,
+    vectorRanking: ReadonlyMap<string, number> | null,
+  ): void {
+    this.queryCache.set(cacheKey, {
+      kind,
+      feedbackEpoch: this.feedbackTracker.getFeedbackEpoch(),
+      preAdjust,
+      vectorRanking: vectorRanking ? [...vectorRanking] : null,
+    });
+  }
+
+  private rememberWitness(
+    searchId: string,
+    results: readonly ToolSearchResult[],
+    vectorRanking: ReadonlyMap<string, number> | null,
+  ): void {
+    this.lastWitness = {
+      searchId,
+      returnedTools: results.map((result) => result.name),
+      vectorRanking,
+    };
+  }
+
+  /** Exact tool-name queries are the only rank-preserving skip of RRF. */
+  private isExactNameQuery(rawQuery: string): boolean {
+    const normalised = rawQuery.toLowerCase().replace(/[\s-]+/g, '_');
+    return this.docNameIndex.has(normalised);
+  }
+
+  /**
+   * BM25 + trigram + exact-name multiplier. Tier is applied later so a cache
+   * hit can replay a different profile.
+   */
+  private quickPathSearch(query: string, queryTokens: string[]): Float64Array {
     const scores = new Float64Array(this.docCount);
 
     for (const qToken of queryTokens) {
@@ -765,28 +814,7 @@ export class ToolSearchEngine {
       scores[idx]! *= SEARCH_EXACT_NAME_MATCH_MULTIPLIER;
     }
 
-    // Mirror the full-path tier penalty so tool visibility is consistent
-    // between the simple-query fast path and the full RRF path.
-    this.applyTierPenalty(scores, visibleDomains, profile);
-
-    const active = activeToolNames ?? new Set<string>();
-    const candidates: ToolSearchResult[] = [];
-
-    for (let i = 0; i < this.docCount; i++) {
-      if (scores[i]! > 0) {
-        const doc = this.docs[i]!;
-        candidates.push({
-          name: doc.name,
-          domain: doc.domain,
-          shortDescription: doc.shortDescription,
-          score: Math.round(scores[i]! * 1000) / 1000,
-          isActive: active.has(doc.name),
-        });
-      }
-    }
-
-    candidates.sort((a, b) => b.score - a.score);
-    return candidates.slice(0, topK);
+    return scores;
   }
 
   /**
@@ -902,14 +930,13 @@ export class ToolSearchEngine {
     multiplier: number,
   ): void {
     const df = postings.length;
-    const idf = Math.log((this.docCount - df + 0.5) / (df + 0.5) + 1);
-    const b = SEARCH_BM25_B;
+    const idf = this.idfLookupTable[df] ?? 0;
     const k1 = SEARCH_BM25_K1;
+    const k1Plus1 = k1 + 1;
 
     for (const { docIndex, tf, weight } of postings) {
-      const doc = this.docs[docIndex]!;
-      const norm = 1 - b + b * (doc.length / this.avgDocLength);
-      const tfNorm = (tf * (k1 + 1)) / (tf + k1 * norm);
+      const norm = this.docNormTable[docIndex]!;
+      const tfNorm = (tf * k1Plus1) / (tf + k1 * norm);
       scores[docIndex]! += idf * tfNorm * weight * multiplier;
     }
   }
@@ -932,7 +959,11 @@ export class ToolSearchEngine {
     _queryTokens: string[],
     query: string,
     scores: Float64Array,
-  ): Promise<{ topBm25Score: number; vectorParticipated: boolean }> {
+  ): Promise<{
+    topBm25Score: number;
+    vectorParticipated: boolean;
+    vectorRanking: Map<string, number> | null;
+  }> {
     const k = SEARCH_RRF_K;
     const trigramWeight = SEARCH_TRIGRAM_WEIGHT;
 
@@ -971,14 +1002,15 @@ export class ToolSearchEngine {
     // stored an EMPTY ranking, so the next tool-call feedback saw "tool not
     // in ranking" and took a constant down-step, eroding the vector weight on
     // strong-BM25 queries even though the vector signal never voted.
+    let vectorRanking: Map<string, number> | null = null;
     if (vectorRanked === null) {
       this.feedbackTracker.recordVectorRanking(null);
     } else {
-      const ranking = new Map<string, number>();
+      vectorRanking = new Map<string, number>();
       for (const [docIdx, rank] of vectorRanked) {
-        ranking.set(this.docs[docIdx]!.name, rank);
+        vectorRanking.set(this.docs[docIdx]!.name, rank);
       }
-      this.feedbackTracker.recordVectorRanking(ranking);
+      this.feedbackTracker.recordVectorRanking(vectorRanking);
     }
 
     // ── Fuse via RRF ──
@@ -1008,7 +1040,7 @@ export class ToolSearchEngine {
     }
     blendRrfIntoScores(scores, fusedRrfScores);
 
-    return { topBm25Score, vectorParticipated: vectorScores !== null };
+    return { topBm25Score, vectorParticipated: vectorScores !== null, vectorRanking };
   }
 
   // ── Dense vector search methods (Phase 8) ──
@@ -1142,8 +1174,9 @@ export class ToolSearchEngine {
    * - Updates the adaptive vector weight via FeedbackTracker.
    * - Records the invocation timestamp for the recency / frequency boost.
    *
-   * Cached entries are not forcibly invalidated; they self-expire through
-   * the vector-weight tolerance check (see `isCachedEntryFresh`).
+   * Learning is bound to `lastWitness`: a tool the latest search did not
+   * return does not move the vector weight. The weight itself moves only
+   * when a fold commits, which bumps the cache epoch.
    *
    * @param toolName The tool that was invoked
    * @param lastQuery The search query that led to this tool call. Recorded by
@@ -1152,7 +1185,17 @@ export class ToolSearchEngine {
    *   string.
    */
   recordToolCallFeedback(toolName: string, lastQuery: string): void {
-    this.feedbackTracker.recordToolCallFeedback(toolName, !!this.embeddingEngine, lastQuery);
+    const witness = this.lastWitness;
+    if (witness && witness.returnedTools.includes(toolName)) {
+      const vectorParticipated = witness.vectorRanking !== null;
+      this.feedbackTracker.recordToolCallFeedback(toolName, !!this.embeddingEngine, lastQuery, {
+        searchId: witness.searchId,
+        vectorParticipated,
+        vectorRank: vectorParticipated ? (witness.vectorRanking!.get(toolName) ?? null) : null,
+      });
+    } else {
+      this.feedbackTracker.noteQuery(lastQuery);
+    }
     // Move-to-end ensures LRU ordering via Map insertion-order semantics.
     this.recencyTracker.delete(toolName);
     this.recencyTracker.set(toolName, Date.now());
@@ -1254,5 +1297,20 @@ export class ToolSearchEngine {
       docs: this.docs,
       affinityGraph: this.affinityGraph,
     });
+  }
+
+  /**
+   * Succinct cryptographic state commitment (Merkle Root) over the indexed tools catalog.
+   * Inspired by Mina's state commitment model. Enables O(1) state verification.
+   */
+  getStateRoot(): string {
+    return this.merkleTree.root;
+  }
+
+  /**
+   * Generate an O(log N) membership witness for a tool against the current index state root.
+   */
+  getToolWitness(toolName: string): ToolStateWitness | null {
+    return this.merkleTree.getWitness(toolName);
   }
 }

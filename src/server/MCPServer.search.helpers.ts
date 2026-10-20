@@ -4,6 +4,7 @@
  * Provides tool name resolution, search engine construction with caching,
  * and domain description generation.
  */
+import { createHash } from 'node:crypto';
 import { getProfileDomains, getToolDomain, getToolsForProfile } from '@server/ToolCatalog';
 import type { Tool } from '@modelcontextprotocol/server';
 import type { ToolProfile } from '@server/ToolCatalog';
@@ -100,14 +101,31 @@ interface CachedSearchEngine {
 const searchEngineCache = new WeakMap<MCPServerContext, CachedSearchEngine>();
 
 /**
- * Build a cache signature from all inputs that affect ToolSearchEngine construction.
- * Changes in extension tools or workflow runtime state invalidate the cache.
+ * Commit the engine cache to the witness that actually builds the index:
+ * name, domain, description, and input schema. A description edit that keeps
+ * the same name must rebuild BM25 and the embedding cache together.
  */
+function hashExtensionWitness(
+  name: string,
+  domain: string,
+  tool: { description?: string; inputSchema?: unknown } | undefined,
+): string {
+  const hash = createHash('sha256');
+  hash.update(name);
+  hash.update('\0');
+  hash.update(domain);
+  hash.update('\0');
+  hash.update(tool?.description ?? '');
+  hash.update('\0');
+  hash.update(tool?.inputSchema === undefined ? '' : JSON.stringify(tool.inputSchema));
+  return hash.digest('hex').slice(0, 12);
+}
+
 export function buildSearchSignature(ctx: MCPServerContext): string {
-  // Extension tool identity + domain mapping
   const extParts: string[] = [];
   for (const [name, record] of ctx.extensionToolsByName) {
-    extParts.push(`${name}:${record.domain}`);
+    const domain = record.domain ?? '';
+    extParts.push(`${name}:${domain}:${hashExtensionWitness(name, domain, record.tool)}`);
   }
   extParts.sort();
 

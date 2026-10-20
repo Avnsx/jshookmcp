@@ -18,6 +18,7 @@
  * vector weight survives process restarts via export/restoreSnapshot.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import type { SearchConfig } from '@internal-types/config';
 import { FeedbackTracker } from '@server/search/FeedbackTracker';
 import {
   SEARCH_VECTOR_COSINE_WEIGHT,
@@ -41,6 +42,11 @@ vi.mock('dotenv', () => dotenvMock);
 
 const EPS = 1e-9;
 const INIT = SEARCH_VECTOR_COSINE_WEIGHT;
+
+/** Step-math tests opt out of the production fold of 4. */
+function makeTracker(config?: Partial<SearchConfig>): FeedbackTracker {
+  return new FeedbackTracker({ feedbackFoldSize: 1, ...config } as SearchConfig);
+}
 const UP = SEARCH_VECTOR_LEARN_UP;
 const DOWN = SEARCH_VECTOR_LEARN_DOWN;
 const N = SEARCH_VECTOR_LEARN_TOP_N;
@@ -48,24 +54,24 @@ const N = SEARCH_VECTOR_LEARN_TOP_N;
 describe('FeedbackTracker', () => {
   describe('initialization', () => {
     it('uses default vector weight from constants when no config provided', () => {
-      const tracker = new FeedbackTracker();
+      const tracker = makeTracker();
       expect(tracker.getVectorWeight()).toBe(INIT);
     });
 
     it('uses custom vector weight from search config', () => {
-      const tracker = new FeedbackTracker({ vectorCosineWeight: 0.6 } as any);
+      const tracker = makeTracker({ vectorCosineWeight: 0.6 });
       expect(tracker.getVectorWeight()).toBe(0.6);
     });
 
     it('uses config value of 0 if explicitly set', () => {
-      const tracker = new FeedbackTracker({ vectorCosineWeight: 0 } as any);
+      const tracker = makeTracker({ vectorCosineWeight: 0 });
       expect(tracker.getVectorWeight()).toBe(0);
     });
   });
 
   describe('recordVectorRanking', () => {
     it('stores the vector ranking for feedback tracking', () => {
-      const tracker = new FeedbackTracker();
+      const tracker = makeTracker();
       const ranking = new Map([
         ['tool_a', 0],
         ['tool_b', 1],
@@ -77,7 +83,7 @@ describe('FeedbackTracker', () => {
     });
 
     it('treats a null ranking (vector signal did not participate) as no evidence', () => {
-      const tracker = new FeedbackTracker();
+      const tracker = makeTracker();
       tracker.recordVectorRanking(new Map([['tool_a', 0]]));
       tracker.recordToolCallFeedback('tool_a', true);
       const after = tracker.getVectorWeight();
@@ -95,7 +101,7 @@ describe('FeedbackTracker', () => {
     let tracker: FeedbackTracker;
 
     beforeEach(() => {
-      tracker = new FeedbackTracker();
+      tracker = makeTracker();
     });
 
     it('returns false when no ranking was recorded', () => {
@@ -160,7 +166,7 @@ describe('FeedbackTracker', () => {
     });
 
     it('respects upper bound of 0.8', () => {
-      const highTracker = new FeedbackTracker({ vectorCosineWeight: 0.77 } as any);
+      const highTracker = makeTracker({ vectorCosineWeight: 0.77 });
       highTracker.recordVectorRanking(new Map([['tool', 0]]));
 
       highTracker.recordToolCallFeedback('tool', true); // 0.77 + UP → clamp 0.8
@@ -172,7 +178,7 @@ describe('FeedbackTracker', () => {
     });
 
     it('respects lower bound of 0.1', () => {
-      const lowTracker = new FeedbackTracker({ vectorCosineWeight: 0.11 } as any);
+      const lowTracker = makeTracker({ vectorCosineWeight: 0.11 });
       lowTracker.recordVectorRanking(new Map([['tool', 100]]));
 
       lowTracker.recordToolCallFeedback('tool', true); // 0.11 - DOWN → clamp 0.1
@@ -200,7 +206,7 @@ describe('FeedbackTracker', () => {
 
   describe('vectorDynamicWeight switch', () => {
     it('defaults to learning enabled when config is undefined', () => {
-      const tracker = new FeedbackTracker();
+      const tracker = makeTracker();
       tracker.recordVectorRanking(new Map([['tool_a', 0]]));
       const result = tracker.recordToolCallFeedback('tool_a', true);
       expect(result).toBe(true);
@@ -208,7 +214,7 @@ describe('FeedbackTracker', () => {
     });
 
     it('skips weight adjustment when vectorDynamicWeight is false', () => {
-      const tracker = new FeedbackTracker({ vectorDynamicWeight: false } as any);
+      const tracker = makeTracker({ vectorDynamicWeight: false });
       tracker.recordVectorRanking(new Map([['tool_a', 0]]));
       const result = tracker.recordToolCallFeedback('tool_a', true);
 
@@ -217,7 +223,7 @@ describe('FeedbackTracker', () => {
     });
 
     it('keeps the initial weight across many feedback calls when disabled', () => {
-      const tracker = new FeedbackTracker({ vectorDynamicWeight: false } as any);
+      const tracker = makeTracker({ vectorDynamicWeight: false });
       for (let i = 0; i < 5; i++) {
         tracker.recordVectorRanking(new Map([['tool_a', 0]]));
         tracker.recordToolCallFeedback('tool_a', true);
@@ -228,7 +234,7 @@ describe('FeedbackTracker', () => {
     });
 
     it('still records the feedback query when learning is disabled', () => {
-      const tracker = new FeedbackTracker({ vectorDynamicWeight: false } as any);
+      const tracker = makeTracker({ vectorDynamicWeight: false });
       tracker.recordVectorRanking(new Map([['tool_a', 0]]));
       tracker.recordToolCallFeedback('tool_a', true, 'find memory scanner');
       expect(tracker.getLastFeedbackQuery()).toBe('find memory scanner');
@@ -237,19 +243,19 @@ describe('FeedbackTracker', () => {
 
   describe('lastFeedbackQuery', () => {
     it('starts as null', () => {
-      const tracker = new FeedbackTracker();
+      const tracker = makeTracker();
       expect(tracker.getLastFeedbackQuery()).toBeNull();
     });
 
     it('records the query from the tool call feedback', () => {
-      const tracker = new FeedbackTracker();
+      const tracker = makeTracker();
       tracker.recordVectorRanking(new Map([['tool_a', 0]]));
       tracker.recordToolCallFeedback('tool_a', true, 'search query');
       expect(tracker.getLastFeedbackQuery()).toBe('search query');
     });
 
     it('records the latest query on repeated feedback calls', () => {
-      const tracker = new FeedbackTracker();
+      const tracker = makeTracker();
       tracker.recordVectorRanking(new Map([['tool_a', 0]]));
       tracker.recordToolCallFeedback('tool_a', true, 'first query');
       tracker.recordToolCallFeedback('tool_a', true, 'second query');
@@ -257,14 +263,14 @@ describe('FeedbackTracker', () => {
     });
 
     it('records an empty string as null', () => {
-      const tracker = new FeedbackTracker();
+      const tracker = makeTracker();
       tracker.recordVectorRanking(new Map([['tool_a', 0]]));
       tracker.recordToolCallFeedback('tool_a', true, '');
       expect(tracker.getLastFeedbackQuery()).toBeNull();
     });
 
     it('does not require a ranking to record the query', () => {
-      const tracker = new FeedbackTracker();
+      const tracker = makeTracker();
       tracker.recordToolCallFeedback('tool_a', true, 'query without ranking');
       expect(tracker.getLastFeedbackQuery()).toBe('query without ranking');
     });
@@ -272,7 +278,7 @@ describe('FeedbackTracker', () => {
 
   describe('snapshot persistence', () => {
     it('exports the current vector weight', () => {
-      const tracker = new FeedbackTracker();
+      const tracker = makeTracker();
       tracker.recordVectorRanking(new Map([['tool_a', 0]]));
       tracker.recordToolCallFeedback('tool_a', true);
 
@@ -281,18 +287,18 @@ describe('FeedbackTracker', () => {
     });
 
     it('round-trips the vector weight through export/restore', () => {
-      const source = new FeedbackTracker();
+      const source = makeTracker();
       source.recordVectorRanking(new Map([['tool_a', 0]]));
       source.recordToolCallFeedback('tool_a', true);
       const exported = source.exportSnapshot();
 
-      const target = new FeedbackTracker();
+      const target = makeTracker();
       target.restoreSnapshot(exported);
       expect(target.getVectorWeight()).toBeCloseTo(exported.vectorWeight, 10);
     });
 
     it('is marked dirty after learning and clean after markPersisted', () => {
-      const tracker = new FeedbackTracker();
+      const tracker = makeTracker();
       expect(tracker.isPersistDirty()).toBe(false);
 
       tracker.recordVectorRanking(new Map([['tool_a', 0]]));
@@ -310,14 +316,14 @@ describe('FeedbackTracker', () => {
     it('marks itself dirty when learning is disabled', () => {
       // Learning off still mutates lastFeedbackQuery, so a snapshot taken
       // before the call would miss it.
-      const tracker = new FeedbackTracker({ vectorDynamicWeight: false } as any);
+      const tracker = makeTracker({ vectorDynamicWeight: false });
       tracker.recordVectorRanking(new Map([['tool_a', 0]]));
       tracker.recordToolCallFeedback('tool_a', true, 'query');
       expect(tracker.isPersistDirty()).toBe(true);
     });
 
     it('marks itself clean after restore', () => {
-      const tracker = new FeedbackTracker();
+      const tracker = makeTracker();
       tracker.recordVectorRanking(new Map([['tool_a', 0]]));
       tracker.recordToolCallFeedback('tool_a', true);
       expect(tracker.isPersistDirty()).toBe(true);
@@ -328,7 +334,7 @@ describe('FeedbackTracker', () => {
     });
 
     it('clamps restored weight into the [0.1, 0.8] bounds', () => {
-      const tracker = new FeedbackTracker();
+      const tracker = makeTracker();
       tracker.restoreSnapshot({ vectorWeight: 5 });
       expect(tracker.getVectorWeight()).toBe(0.8);
       tracker.restoreSnapshot({ vectorWeight: -3 });
@@ -336,7 +342,7 @@ describe('FeedbackTracker', () => {
     });
 
     it('ignores malformed snapshot payloads', () => {
-      const tracker = new FeedbackTracker();
+      const tracker = makeTracker();
       const before = tracker.getVectorWeight();
 
       tracker.restoreSnapshot(null);
@@ -351,7 +357,7 @@ describe('FeedbackTracker', () => {
 
   describe('edge cases', () => {
     it('handles empty ranking map', () => {
-      const tracker = new FeedbackTracker();
+      const tracker = makeTracker();
       tracker.recordVectorRanking(new Map());
 
       const result = tracker.recordToolCallFeedback('any_tool', true);
@@ -360,7 +366,7 @@ describe('FeedbackTracker', () => {
     });
 
     it('handles ranking with negative rank (counts as top hit)', () => {
-      const tracker = new FeedbackTracker();
+      const tracker = makeTracker();
       tracker.recordVectorRanking(new Map([['tool', -1]]));
       const result = tracker.recordToolCallFeedback('tool', true);
 
@@ -369,13 +375,45 @@ describe('FeedbackTracker', () => {
     });
 
     it('handles boundary rank of N (first outside top-N)', () => {
-      const tracker = new FeedbackTracker();
+      const tracker = makeTracker();
       tracker.recordVectorRanking(new Map([['tool', N]]));
       const result = tracker.recordToolCallFeedback('tool', true);
 
       expect(result).toBe(true);
       // Rank N is in the [N, 2N) zone → small positive step
       expect(Math.abs(tracker.getVectorWeight() - (INIT + UP * 0.3))).toBeLessThan(EPS);
+    });
+  });
+
+  describe('feedback fold', () => {
+    it('keeps the weight and epoch still until foldSize actions have queued', () => {
+      const folded = makeTracker({ feedbackFoldSize: 4 });
+      folded.recordVectorRanking(new Map([['tool_a', 0]]));
+
+      expect(folded.recordToolCallFeedback('tool_a', true)).toBe(false);
+      expect(folded.recordToolCallFeedback('tool_a', true)).toBe(false);
+      expect(folded.recordToolCallFeedback('tool_a', true)).toBe(false);
+      expect(folded.getVectorWeight()).toBe(INIT);
+      expect(folded.getFeedbackEpoch()).toBe(0);
+
+      expect(folded.recordToolCallFeedback('tool_a', true)).toBe(true);
+      expect(folded.getFeedbackEpoch()).toBe(1);
+      expect(folded.getVectorWeight()).toBeCloseTo(Math.min(0.8, INIT + 4 * UP), 10);
+    });
+
+    it('does not bump the epoch when bound evidence says the vector signal was absent', () => {
+      const folded = makeTracker();
+      folded.recordVectorRanking(new Map([['tool_a', 0]]));
+      const moved = folded.recordToolCallFeedback('tool_a', true, 'navigate', {
+        searchId: 'search-1',
+        vectorParticipated: false,
+        vectorRank: null,
+      });
+
+      expect(moved).toBe(false);
+      expect(folded.getVectorWeight()).toBe(INIT);
+      expect(folded.getFeedbackEpoch()).toBe(0);
+      expect(folded.getLastFeedbackQuery()).toBe('navigate');
     });
   });
 });

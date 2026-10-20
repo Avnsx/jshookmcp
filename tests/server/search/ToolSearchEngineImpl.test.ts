@@ -535,7 +535,7 @@ describe('search/ToolSearchEngineImpl', () => {
     const engine = new ToolSearchEngine([makeTool('page_navigate', 'Navigate a page')]);
 
     await engine.search('navigate', 5);
-    const cacheKey = `navigate\0${5}`;
+    const cacheKey = 'navigate';
 
     expect((engine as any).queryCache.get(cacheKey)).toBeDefined();
     (engine as any).queryCache.clear();

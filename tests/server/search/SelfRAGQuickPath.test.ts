@@ -102,7 +102,7 @@ describe('search/SelfRAGQuickPath', () => {
     expect(results[0]?.name).toBe('page_navigate');
   });
 
-  it('triggers quick path for single token query', async () => {
+  it('keeps a single token on the full path and still ranks the name hit first', async () => {
     state.allTools = [
       makeTool('hook_intercept', 'Intercept function calls'),
       makeTool('page_navigate', 'Navigate to URL'),
@@ -111,9 +111,11 @@ describe('search/SelfRAGQuickPath', () => {
 
     const { ToolSearchEngine } = await import('@server/search/ToolSearchEngineImpl');
     const engine = new ToolSearchEngine();
+    const quickPathSpy = vi.spyOn(engine as any, 'quickPathSearch');
 
     const results = await engine.search('hook', 5);
 
+    expect(quickPathSpy).not.toHaveBeenCalled();
     expect(results.length).toBeGreaterThan(0);
     expect(results[0]?.name).toBe('hook_intercept');
   });
@@ -154,7 +156,7 @@ describe('search/SelfRAGQuickPath', () => {
     expect(results.find((r) => r.name === 'page_click')?.isActive).toBe(false);
   });
 
-  it('quick path returns empty for non-matching single token', async () => {
+  it('returns empty for a token that matches nothing', async () => {
     state.allTools = [
       makeTool('page_navigate', 'Navigate a page'),
       makeTool('page_click', 'Click an element'),

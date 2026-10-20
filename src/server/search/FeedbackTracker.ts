@@ -26,6 +26,7 @@
  */
 
 import {
+  SEARCH_FEEDBACK_FOLD_SIZE,
   SEARCH_VECTOR_COSINE_WEIGHT,
   SEARCH_VECTOR_DYNAMIC_WEIGHT,
   SEARCH_VECTOR_LEARN_DOWN,
@@ -34,9 +35,19 @@ import {
 } from '@src/constants';
 import type { SearchConfig } from '@internal-types/config';
 import type { SnapshotSource } from '@server/persistence/RuntimeSnapshotScheduler';
+import { resolveFeedbackFoldSize, type FeedbackEvidence } from '@server/search/SearchStatement';
 
 const MIN_WEIGHT = 0.1;
 const MAX_WEIGHT = 0.8;
+
+function readFoldSize(): number | undefined {
+  try {
+    return typeof SEARCH_FEEDBACK_FOLD_SIZE === 'number' ? SEARCH_FEEDBACK_FOLD_SIZE : undefined;
+  } catch {
+    // Partial `@src/constants` mocks omit this export and throw on access.
+    return undefined;
+  }
+}
 
 /**
  * Serialized learning state. Only the vector weight is learned; the ranking
@@ -48,6 +59,9 @@ export interface FeedbackTrackerSnapshot {
 
 export class FeedbackTracker implements SnapshotSource {
   private vectorWeight: number;
+  private feedbackEpoch = 0;
+  private readonly pending: FeedbackEvidence[] = [];
+  private readonly foldSize: number;
   private lastVectorRanking: Map<string, number> | null = null;
   /**
    * The query that accompanied the most recent tool-call feedback. Recorded
@@ -65,6 +79,7 @@ export class FeedbackTracker implements SnapshotSource {
 
   constructor(searchConfig?: SearchConfig) {
     this.vectorWeight = searchConfig?.vectorCosineWeight ?? SEARCH_VECTOR_COSINE_WEIGHT;
+    this.foldSize = resolveFeedbackFoldSize(searchConfig?.feedbackFoldSize, readFoldSize());
     this.topN = Math.max(1, SEARCH_VECTOR_LEARN_TOP_N);
     this.learnUp = Math.max(0, SEARCH_VECTOR_LEARN_UP);
     this.learnDown = Math.max(0, SEARCH_VECTOR_LEARN_DOWN);
@@ -73,6 +88,11 @@ export class FeedbackTracker implements SnapshotSource {
 
   getVectorWeight(): number {
     return this.vectorWeight;
+  }
+
+  /** Bumps only when a fold changes the weight. Cache entries store this. */
+  getFeedbackEpoch(): number {
+    return this.feedbackEpoch;
   }
 
   /**
@@ -107,23 +127,65 @@ export class FeedbackTracker implements SnapshotSource {
    * @param lastQuery The search query that led to this tool call. Recorded for
    *   quality analysis only — it never influences the learned weight.
    */
-  recordToolCallFeedback(toolName: string, vectorEnabled: boolean, lastQuery?: string): boolean {
+  noteQuery(lastQuery: string | undefined): void {
     if (lastQuery && lastQuery.length > 0) {
       this.lastFeedbackQuery = lastQuery;
       this.dirty = true;
     }
+  }
 
-    if (!this.lastVectorRanking || !vectorEnabled) return false;
+  /**
+   * Queue one bound feedback action. When `evidence` is omitted the unbound
+   * ranking slot is used, which is the direct unit-test path. A fold runs
+   * once `foldSize` actions are queued and returns whether the weight moved.
+   */
+  recordToolCallFeedback(
+    toolName: string,
+    vectorEnabled: boolean,
+    lastQuery?: string,
+    evidence?: FeedbackEvidence,
+  ): boolean {
+    this.noteQuery(lastQuery);
+
+    if (!vectorEnabled) return false;
     // SEARCH_VECTOR_DYNAMIC_WEIGHT gate: A/B baselines
     // (scripts/search-tune/compare-static-model.ts) disable learning by
     // passing vectorDynamicWeight: false; the weight then stays at its
     // configured initial value for the whole run.
     if (!this.dynamicWeightEnabled) return false;
 
-    const vectorRank = this.lastVectorRanking.get(toolName);
-    const before = this.vectorWeight;
+    const resolved = evidence ?? this.evidenceFromLastRanking(toolName);
+    if (!resolved?.vectorParticipated) return false;
 
-    if (vectorRank === undefined) {
+    this.pending.push(resolved);
+    if (this.pending.length >= this.foldSize) return this.fold();
+    return false;
+  }
+
+  private evidenceFromLastRanking(toolName: string): FeedbackEvidence | null {
+    if (!this.lastVectorRanking) return null;
+    const vectorRank = this.lastVectorRanking.get(toolName);
+    return {
+      searchId: 'unbound',
+      vectorParticipated: true,
+      vectorRank: vectorRank === undefined ? null : vectorRank,
+    };
+  }
+
+  private fold(): boolean {
+    const batch = this.pending.splice(0, this.pending.length);
+    const before = this.vectorWeight;
+    for (const evidence of batch) this.applyEvidence(evidence);
+    if (this.vectorWeight === before) return false;
+    this.feedbackEpoch += 1;
+    this.dirty = true;
+    return true;
+  }
+
+  private applyEvidence(evidence: FeedbackEvidence): void {
+    if (!evidence.vectorParticipated) return;
+    const vectorRank = evidence.vectorRank;
+    if (vectorRank === null) {
       this.vectorWeight = Math.max(MIN_WEIGHT, this.vectorWeight - this.learnDown);
     } else if (vectorRank < this.topN) {
       this.vectorWeight = Math.min(MAX_WEIGHT, this.vectorWeight + this.learnUp);
@@ -132,9 +194,6 @@ export class FeedbackTracker implements SnapshotSource {
     } else {
       this.vectorWeight = Math.max(MIN_WEIGHT, this.vectorWeight - this.learnDown);
     }
-
-    if (this.vectorWeight !== before) this.dirty = true;
-    return this.vectorWeight !== before;
   }
 
   // ── Snapshot persistence ──────────────────────────────────────────────

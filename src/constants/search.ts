@@ -86,6 +86,13 @@ export const SEARCH_CACHE_VECTOR_WEIGHT_TOLERANCE = float(
   0.05,
 );
 
+/**
+ * Bound feedback actions folded into one vector-weight update.
+ * The query cache is versioned by that fold's epoch, so repeated queries
+ * stay hits until a fold actually moves the weight.
+ */
+export const SEARCH_FEEDBACK_FOLD_SIZE = int('SEARCH_FEEDBACK_FOLD_SIZE', 4);
+
 /* ================================================================== */
 /*  Semantic search: synonym, trigram, RRF                             */
 /* ================================================================== */

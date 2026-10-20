@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { SearchQualityTracker } from '@server/search/SearchQualityTracker';
+import { SEARCH_VECTOR_BM25_SKIP_THRESHOLD } from '@src/constants';
 
 describe('SearchQualityTracker', () => {
   let tracker: SearchQualityTracker;
@@ -479,9 +480,10 @@ describe('SearchQualityTracker', () => {
     });
 
     it('computes weak ratio over full-path records below the skip threshold', () => {
-      tracker.recordSearch('q1', ['a'], [0.9], 5, { bm25TopScore: 3 });
-      tracker.recordSearch('q2', ['b'], [0.9], 5, { bm25TopScore: 9 });
-      tracker.recordSearch('q3', ['c'], [0.9], 5, { bm25TopScore: 7.5 });
+      const threshold = SEARCH_VECTOR_BM25_SKIP_THRESHOLD;
+      tracker.recordSearch('q1', ['a'], [0.9], 5, { bm25TopScore: threshold - 2 });
+      tracker.recordSearch('q2', ['b'], [0.9], 5, { bm25TopScore: threshold + 1 });
+      tracker.recordSearch('q3', ['c'], [0.9], 5, { bm25TopScore: threshold - 0.5 });
       // Quick-path record excluded from the denominator.
       tracker.recordSearch('q4', ['d'], [0.9], 5, { vectorParticipated: false });
 

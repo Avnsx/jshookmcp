@@ -139,6 +139,71 @@ describe('search/FeedbackSignal', () => {
     expect(engine.getFeedbackTracker().getVectorWeight()).toBe(after);
   });
 
+  it('does not learn from a tool the latest search did not return', async () => {
+    state.skipThreshold = 0;
+
+    const { ToolSearchEngine } = await import('@server/search/ToolSearchEngineImpl');
+    const engine = new ToolSearchEngine(undefined, undefined, undefined, undefined, {
+      queryCategoryProfiles: [],
+      cjkQueryAliases: [],
+      intentToolBoostRules: [],
+      vectorEnabled: true,
+      vectorDynamicWeight: true,
+      feedbackFoldSize: 1,
+    });
+
+    const first = await engine.search('navigate page url', 5);
+    expect(first.length).toBeGreaterThan(0);
+    await engine.search('page_navigate', 5);
+    const before = engine.getFeedbackTracker().getVectorWeight();
+    // page_click is not the exact-name result set's only possible member, but
+    // it is absent from an exact `page_navigate` hit when it scores zero.
+    engine.recordToolCallFeedback('debug_pause', '');
+    expect(engine.getFeedbackTracker().getVectorWeight()).toBe(before);
+    expect(engine.getFeedbackTracker().getFeedbackEpoch()).toBe(0);
+  });
+
+  it('keeps a repeated query cached until a feedback fold moves the weight', async () => {
+    state.skipThreshold = 0;
+
+    const { ToolSearchEngine } = await import('@server/search/ToolSearchEngineImpl');
+    const engine = new ToolSearchEngine(undefined, undefined, undefined, undefined, {
+      queryCategoryProfiles: [],
+      cjkQueryAliases: [],
+      intentToolBoostRules: [],
+      vectorEnabled: true,
+      vectorDynamicWeight: true,
+      vectorCosineWeight: 0.4,
+      feedbackFoldSize: 4,
+    });
+    await engine.waitForEmbeddings();
+
+    const embedding = (
+      engine as unknown as { embeddingEngine: { embed: (text: string) => Promise<Float32Array> } }
+    ).embeddingEngine;
+    let embedCalls = 0;
+    const originalEmbed = embedding.embed.bind(embedding);
+    embedding.embed = async (text: string) => {
+      embedCalls += 1;
+      return originalEmbed(text);
+    };
+
+    const first = await engine.search('navigate page url', 5);
+    expect(first.length).toBeGreaterThan(0);
+    const afterFirst = embedCalls;
+    engine.recordToolCallFeedback(first[0]!.name, 'navigate page url');
+    engine.recordToolCallFeedback(first[0]!.name, 'navigate page url');
+    engine.recordToolCallFeedback(first[0]!.name, 'navigate page url');
+    await engine.search('navigate page url', 5);
+    expect(embedCalls).toBe(afterFirst);
+    expect(engine.getFeedbackTracker().getFeedbackEpoch()).toBe(0);
+
+    engine.recordToolCallFeedback(first[0]!.name, 'navigate page url');
+    expect(engine.getFeedbackTracker().getFeedbackEpoch()).toBe(1);
+    await engine.search('navigate page url', 5);
+    expect(embedCalls).toBe(afterFirst + 1);
+  });
+
   it('still learns when the vector signal genuinely participates', async () => {
     state.skipThreshold = 0;
 

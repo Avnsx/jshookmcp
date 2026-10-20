@@ -205,7 +205,40 @@ describe('MCPServer.search.helpers', () => {
       ]),
     });
 
-    expect(buildSearchSignature(ctx)).toBe('2::a_tool:browser|z_tool:workflow');
+    expect(buildSearchSignature(ctx)).toMatch(
+      /^2::a_tool:browser:[0-9a-f]{12}\|z_tool:workflow:[0-9a-f]{12}$/,
+    );
+  });
+
+  it('changes the search signature when an extension description changes', () => {
+    const base = {
+      extensionToolsByName: new Map([
+        [
+          'a_tool',
+          {
+            domain: 'browser',
+            tool: { name: 'a_tool', description: 'first', inputSchema: { type: 'object' } },
+          },
+        ],
+      ]),
+      extensionWorkflowRuntimeById: new Map(),
+    };
+    const renamed = {
+      ...base,
+      extensionToolsByName: new Map([
+        [
+          'a_tool',
+          {
+            domain: 'browser',
+            tool: { name: 'a_tool', description: 'second', inputSchema: { type: 'object' } },
+          },
+        ],
+      ]),
+    };
+
+    expect(buildSearchSignature(createCtx(base))).not.toBe(
+      buildSearchSignature(createCtx(renamed)),
+    );
   });
 
   it('caches the search engine by signature and applies workflow and extension boosts', async () => {
