@@ -18,6 +18,10 @@ import { SEARCH_SYNONYM_EXPANSION_LIMIT } from '@src/constants';
 const SYNONYM_GROUPS: ReadonlyArray<ReadonlyArray<string>> = [
   // Navigation
   ['navigate', 'go', 'open', 'visit', 'browse', 'load'],
+  // Reload / refresh
+  ['reload', 'refresh'],
+  // Launch / start / spawn
+  ['launch', 'spawn', 'start', 'init'],
   // Network capture
   ['intercept', 'capture', 'monitor', 'sniff', 'collect', 'record', 'track'],
   // Network requests
@@ -25,11 +29,21 @@ const SYNONYM_GROUPS: ReadonlyArray<ReadonlyArray<string>> = [
   // Authentication
   ['authenticate', 'auth', 'login', 'credential', 'token', 'jwt', 'session'],
   // Debugging
-  ['breakpoint', 'pause', 'halt', 'stop', 'break'],
+  ['breakpoint', 'pause', 'halt', 'stop', 'break', 'bp', 'dbg'],
   // Code stepping
   ['step', 'next', 'continue', 'resume'],
-  // Code transform
-  ['deobfuscate', 'beautify', 'unminify', 'decode', 'transform', 'decompile'],
+  // Code transform / JS deobfuscation
+  ['deobfuscate', 'beautify', 'unminify', 'decode', 'transform', 'unpack'],
+  // Disassembly & decompilation
+  ['disassemble', 'disasm', 'decompile', 'decompiler'],
+  // Android DEX / Dalvik / APK
+  ['dex', 'apk', 'dalvik', 'smali', 'jadx', 'apktool'],
+  // CPU registers / execution state
+  ['register', 'registers', 'reg', 'regs'],
+  // Exploit & binary security
+  ['exploit', 'rop', 'gadget', 'shellcode', 'pwn'],
+  // Process & thread
+  ['process', 'proc', 'thread', 'threads', 'pid', 'tid'],
   // Screenshot / visual
   ['screenshot', 'snapshot', 'image', 'picture', 'photo'],
   // Execute / evaluate
@@ -39,7 +53,9 @@ const SYNONYM_GROUPS: ReadonlyArray<ReadonlyArray<string>> = [
   // Click / interact
   ['click', 'tap', 'press', 'interact', 'trigger'],
   // Type / input
-  ['type', 'input', 'enter', 'fill', 'write'],
+  ['type', 'input', 'enter', 'fill', 'keystroke'],
+  // Write / store
+  ['write', 'overwrite', 'store'],
   // Storage
   ['cookie', 'localstorage', 'storage', 'cache', 'indexeddb'],
   // WebSocket
@@ -83,11 +99,13 @@ const SYNONYM_GROUPS: ReadonlyArray<ReadonlyArray<string>> = [
   // Close / disconnect
   ['close', 'disconnect', 'quit', 'exit', 'shutdown', 'terminate'],
   // Network traffic
-  ['traffic', 'network', 'request', 'response', 'connection'],
+  ['traffic', 'network', 'request', 'response', 'connection', 'pkt', 'packet', 'pcap'],
   // Heap / memory
-  ['heap', 'memory', 'allocation', 'gc', 'garbage'],
+  ['heap', 'memory', 'allocation', 'gc', 'garbage', 'mem', 'ram', 'addr', 'pointer', 'ptr'],
   // Export / save
   ['export', 'save', 'dump', 'download', 'extract'],
+  // Function / Symbol
+  ['function', 'symbol', 'symbols', 'method', 'sym', 'syms', 'fn'],
   // Replay / resend
   ['replay', 'resend', 'repeat', 'redo', 'retry'],
   // Variable / scope

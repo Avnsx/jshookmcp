@@ -52,6 +52,152 @@ const PARAM_DESCRIPTION_STOP_WORDS = new Set([
 ]);
 
 /**
+ * Standard English stop words to filter out during query processing
+ * and document description indexing.
+ */
+export const ENGLISH_STOP_WORDS = new Set<string>([
+  'a',
+  'about',
+  'above',
+  'after',
+  'again',
+  'against',
+  'all',
+  'am',
+  'an',
+  'and',
+  'any',
+  'are',
+  'aren',
+  'as',
+  'at',
+  'be',
+  'because',
+  'been',
+  'before',
+  'being',
+  'below',
+  'between',
+  'both',
+  'but',
+  'by',
+  'can',
+  'cannot',
+  'could',
+  'couldn',
+  'did',
+  'didn',
+  'do',
+  'does',
+  'doesn',
+  'doing',
+  'don',
+  'down',
+  'during',
+  'each',
+  'few',
+  'for',
+  'from',
+  'further',
+  'had',
+  'hadn',
+  'has',
+  'hasn',
+  'have',
+  'haven',
+  'having',
+  'he',
+  'her',
+  'here',
+  'hers',
+  'herself',
+  'him',
+  'himself',
+  'his',
+  'how',
+  'i',
+  'if',
+  'in',
+  'into',
+  'is',
+  'isn',
+  'it',
+  'its',
+  'itself',
+  'just',
+  'me',
+  'more',
+  'most',
+  'my',
+  'myself',
+  'no',
+  'nor',
+  'not',
+  'now',
+  'of',
+  'off',
+  'on',
+  'once',
+  'only',
+  'or',
+  'other',
+  'our',
+  'ours',
+  'ourselves',
+  'out',
+  'over',
+  'own',
+  'same',
+  'she',
+  'should',
+  'shouldn',
+  'so',
+  'some',
+  'such',
+  'than',
+  'that',
+  'the',
+  'their',
+  'theirs',
+  'them',
+  'themselves',
+  'then',
+  'there',
+  'these',
+  'they',
+  'this',
+  'those',
+  'through',
+  'to',
+  'too',
+  'under',
+  'until',
+  'up',
+  'very',
+  'was',
+  'wasn',
+  'we',
+  'were',
+  'weren',
+  'what',
+  'when',
+  'where',
+  'which',
+  'while',
+  'who',
+  'whom',
+  'why',
+  'with',
+  'would',
+  'wouldn',
+  'you',
+  'your',
+  'yours',
+  'yourself',
+  'yourselves',
+]);
+
+/**
  * QueryNormalizer provides utilities for normalizing and preprocessing search queries
  * and tool metadata for indexing.
  */
@@ -137,5 +283,92 @@ export const QueryNormalizer = {
    */
   normalizeToolName(query: string): string {
     return query.toLowerCase().replace(/[\s-]+/g, '_');
+  },
+
+  /**
+   * Check whether a token is an English stop word.
+   */
+  isStopWord(token: string): boolean {
+    return ENGLISH_STOP_WORDS.has(token.toLowerCase());
+  },
+
+  /**
+   * Filter out English stop words from search query tokens.
+   * If all tokens are stop words, retains the original array so query remains searchable.
+   */
+  filterQueryStopwords(tokens: string[]): string[] {
+    const filtered = tokens.filter((t) => !ENGLISH_STOP_WORDS.has(t.toLowerCase()));
+    return filtered.length > 0 ? filtered : tokens;
+  },
+
+  /**
+   * Return the singular/plural counterpart of an English word if applicable.
+   */
+  inflectWord(token: string): string | null {
+    if (token.length <= 3) return null;
+    const lower = token.toLowerCase();
+    if (lower.endsWith('ies') && lower.length > 4) {
+      return lower.slice(0, -3) + 'y';
+    }
+    if (
+      lower.endsWith('es') &&
+      lower.length > 4 &&
+      (lower.endsWith('shes') ||
+        lower.endsWith('ches') ||
+        lower.endsWith('sses') ||
+        lower.endsWith('xes'))
+    ) {
+      return lower.slice(0, -2);
+    }
+    if (
+      lower.endsWith('s') &&
+      !lower.endsWith('ss') &&
+      !lower.endsWith('us') &&
+      !lower.endsWith('is')
+    ) {
+      return lower.slice(0, -1);
+    }
+    if (
+      lower.endsWith('ss') ||
+      lower.endsWith('sh') ||
+      lower.endsWith('ch') ||
+      lower.endsWith('x')
+    ) {
+      return lower + 'es';
+    }
+    if (!lower.endsWith('s')) {
+      return lower + 's';
+    }
+    return null;
+  },
+
+  /**
+   * Extract parameter signature (names and required fields) from a tool's inputSchema
+   * for type/signature-directed matching.
+   */
+  extractSchemaSignature(inputSchema: unknown): {
+    paramNames: string[];
+    requiredParams: string[];
+  } {
+    const paramNames: string[] = [];
+    const requiredParams: string[] = [];
+    if (!inputSchema || typeof inputSchema !== 'object') {
+      return { paramNames, requiredParams };
+    }
+    const schema = inputSchema as Record<string, unknown>;
+    if (Array.isArray(schema.required)) {
+      for (const r of schema.required) {
+        if (typeof r === 'string' && r.length > 0) {
+          requiredParams.push(r.toLowerCase());
+        }
+      }
+    }
+    const properties = schema.properties;
+    if (properties && typeof properties === 'object') {
+      for (const key of Object.keys(properties)) {
+        paramNames.push(key.toLowerCase());
+      }
+    }
+    return { paramNames, requiredParams };
   },
 };

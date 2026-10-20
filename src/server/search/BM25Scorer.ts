@@ -10,6 +10,7 @@ import type {
   SearchQueryCategoryProfileConfig,
 } from '@internal-types/config';
 import { SynonymExpander } from './SynonymExpander';
+import { QueryNormalizer } from './QueryNormalizer';
 
 // ── BM25 parameters (runtime-tunable via env) ──
 
@@ -164,8 +165,16 @@ export class BM25ScorerImpl {
     }
     result.push(...this.expandCjkAliasTokens(text));
 
-    // Synonym expansion: query-time only (keeps inverted index precise)
+    // Synonym and inflection expansion: query-time only (keeps inverted index precise)
     if (options?.expandSynonyms) {
+      const inflections: string[] = [];
+      for (const token of result) {
+        const inflected = QueryNormalizer.inflectWord(token);
+        if (inflected && !result.includes(inflected) && !inflections.includes(inflected)) {
+          inflections.push(inflected);
+        }
+      }
+      result.push(...inflections);
       result.push(...this.synonymExpander.expandQuery(result));
     }
 

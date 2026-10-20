@@ -67,7 +67,7 @@ export const DEFAULT_QUERY_CATEGORY_PROFILE_CONFIGS = [
   },
   {
     pattern:
-      '(?:reverse|mission|signature|hook|crypto|encrypt|websocket|\\bws\\b|protocol|bundle|webpack|deobfusc|stealth' +
+      '(?:reverse|mission|signature|hook|crypto|encrypt|websocket|\\bws\\b|protocol|bundle|webpack|deobfusc|stealth|' +
       'fingerprint|evidence|\\bhar\\b|逆向|签名|加签|协议|反混淆|反检测|指纹|证据|报告)',
     flags: 'i',
     domainBoosts: [
@@ -211,7 +211,7 @@ export const DEFAULT_INTENT_TOOL_BOOST_RULE_CONFIGS = [
   },
   {
     pattern:
-      '(?:register|signup|sign\\s*up|账号注册|账户注册|邮箱验证|验证账号|激活账号|注册验证|验证码|邮箱激活|激活链接|mail\\s*verify|email\\s*verify' +
+      '(?:register|signup|sign\\s*up|账号注册|账户注册|邮箱验证|验证账号|激活账号|注册验证|验证码|邮箱激活|激活链接|mail\\s*verify|email\\s*verify|' +
       'account\\s*pending|keygen)',
     flags: 'i',
     boosts: [
@@ -297,9 +297,11 @@ export const DEFAULT_INTENT_TOOL_BOOST_RULE_CONFIGS = [
     ],
   },
   {
-    pattern: '(?:evidence|export.*(?:har|markdown|json)|har|report|证据|导出|报告|取证)',
+    pattern:
+      '(?:evidence|export.*(?:\\bhar\\b|markdown|json)|\\bhar\\b|report|证据|导出|报告|取证)',
     flags: 'i',
     boosts: [
+      { tool: 'network_export_har', bonus: 18 },
       { tool: 'evidence_query', bonus: 16 },
       { tool: 'evidence_export', bonus: 14 },
       { tool: 'run_extension_workflow', bonus: 6 },
@@ -317,7 +319,7 @@ export const DEFAULT_INTENT_TOOL_BOOST_RULE_CONFIGS = [
   },
   {
     pattern:
-      '(?:protocol.*registry|channel.*enum|通道枚举|协议注册|协议归类|SSE|EventSource|beacon|postMessage)',
+      '(?:protocol.*registry|channel.*enum|通道枚举|协议注册|协议归类|\\bSSE\\b|\\bEventSource\\b|\\bbeacon\\b|\\bpostMessage\\b)',
     flags: 'i',
     boosts: [
       { tool: 'ws_monitor', bonus: 12 },

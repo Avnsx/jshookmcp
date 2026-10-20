@@ -89,6 +89,12 @@ interface ToolDocument {
   nameTokenSet: ReadonlySet<string>;
   /** nameTokenSet.size cached for quick access. */
   nameTokenCount: number;
+  /** Pre-computed parameter names for type-directed signature matching. */
+  paramNames: ReadonlySet<string>;
+  /** Pre-computed required parameters for signature matching. */
+  requiredParams: ReadonlySet<string>;
+  /** Pre-computed Set of all tokens for O(1) query-coverage validation. */
+  tokenSet: ReadonlySet<string>;
 }
 
 /**
@@ -238,6 +244,9 @@ export class ToolSearchEngine {
       const domainTokens = domain ? this.bm25Scorer.tokenise(domain) : [];
       const descTokens = this.bm25Scorer.tokenise(description);
       const paramTokens = QueryNormalizer.extractParamTokens(tool.inputSchema);
+      const { paramNames, requiredParams } = QueryNormalizer.extractSchemaSignature(
+        tool.inputSchema,
+      );
 
       const allTokens = [...nameTokens, ...domainTokens, ...descTokens, ...paramTokens];
 
@@ -251,6 +260,9 @@ export class ToolSearchEngine {
         nameTokens,
         nameTokenSet,
         nameTokenCount: nameTokenSet.size,
+        paramNames: new Set(paramNames),
+        requiredParams: new Set(requiredParams),
+        tokenSet: new Set(allTokens),
       };
       this.docs.push(doc);
       this.docNameIndex.set(tool.name, i);
@@ -271,6 +283,7 @@ export class ToolSearchEngine {
         termFreqs.set(token, entry);
       }
       for (const token of descTokens) {
+        if (QueryNormalizer.isStopWord(token)) continue;
         const entry = termFreqs.get(token) ?? { tf: 0, weight: 0 };
         entry.tf++;
         entry.weight = Math.max(entry.weight, SEARCH_DESC_TOKEN_WEIGHT);
@@ -391,11 +404,11 @@ export class ToolSearchEngine {
         let idx = -1;
         if (this.docNameIndex.has(candidate)) {
           idx = findDelimitedIndex(lower, candidate, wordCharIdent);
-        }
-        if (idx < 0 && n > 1) {
-          idx = findDelimitedIndex(lower, candidate.replace(/_/g, '-'), wordCharPlain);
-          if (idx < 0) {
-            idx = findDelimitedIndex(lower, candidate.replace(/_/g, ' '), wordCharPlain);
+          if (idx < 0 && n > 1) {
+            idx = findDelimitedIndex(lower, candidate.replace(/_/g, '-'), wordCharPlain);
+            if (idx < 0) {
+              idx = findDelimitedIndex(lower, candidate.replace(/_/g, ' '), wordCharPlain);
+            }
           }
         }
         if (idx < 0) continue;
@@ -408,6 +421,43 @@ export class ToolSearchEngine {
     }
 
     return bestTool;
+  }
+
+  /** Type-directed schema matching and long-query term drift penalty. */
+  private applySchemaAndDriftAdjustments(
+    doc: ToolDocument,
+    queryTokens: string[],
+    queryTokenSet: Set<string>,
+    queryNormalised: string,
+    intentBonus: number,
+  ): number {
+    let multiplier = 1.0;
+
+    let matchedParamCount = 0;
+    let matchedRequiredCount = 0;
+    for (const qt of queryTokens) {
+      if (doc.requiredParams.has(qt)) {
+        matchedRequiredCount++;
+      } else if (doc.paramNames.has(qt)) {
+        matchedParamCount++;
+      }
+    }
+    if (matchedRequiredCount > 0 || matchedParamCount > 0) {
+      const schemaBoost = 1.0 + matchedRequiredCount * 0.15 + matchedParamCount * 0.08;
+      multiplier *= Math.min(schemaBoost, 1.4);
+    }
+
+    if (queryTokenSet.size >= 4 && intentBonus <= 0 && doc.name !== queryNormalised) {
+      let matchedContent = 0;
+      for (const qt of queryTokenSet) {
+        if (doc.tokenSet.has(qt)) matchedContent++;
+      }
+      if (matchedContent <= 1) {
+        multiplier *= Math.max(0.1, matchedContent / queryTokenSet.size);
+      }
+    }
+
+    return multiplier;
   }
 
   /** Exact-name, coverage/precision, domain, category, and per-tool multipliers. */
@@ -440,6 +490,14 @@ export class ToolSearchEngine {
         const precision = matchedCount / queryTokenSet.size;
         scores[i]! *= 1 + SEARCH_COVERAGE_PRECISION_FACTOR * coverage * precision;
       }
+
+      scores[i]! *= this.applySchemaAndDriftAdjustments(
+        doc,
+        queryTokens,
+        queryTokenSet,
+        queryNormalised,
+        intentBonus,
+      );
 
       const domainMultiplier = doc.domain ? (this.domainScoreMultipliers?.get(doc.domain) ?? 1) : 1;
       if (domainMultiplier !== 1) scores[i]! *= domainMultiplier;
@@ -489,6 +547,94 @@ export class ToolSearchEngine {
     return candidates.slice(0, topK);
   }
 
+  /**
+   * Out-of-domain vocabulary specificity check:
+   * If a multi-word query (>= 4 unique content words) has fewer than 30% of its content words
+   * anywhere in the tool catalog, and neither an intent rule, a category profile,
+   * nor an explicit tool mention applies, reject early to eliminate false-positive hallucinations.
+   */
+  private shouldRejectOutOfDomain(contentTokens: string[], query: string): boolean {
+    const uniqueContentTokens = [...new Set(contentTokens)];
+    if (uniqueContentTokens.length < 4 || this.isExactNameQuery(query)) {
+      return false;
+    }
+    const intentBonuses = this.intentBoost.resolveIntentToolBonuses(query);
+    const catBoosts = this.bm25Scorer.detectQueryCategoryBoosts(query);
+    if (
+      intentBonuses.size > 0 ||
+      catBoosts.size > 0 ||
+      this.findExplicitToolMention(query) !== null
+    ) {
+      return false;
+    }
+    let inVocab = 0;
+    let unknownCount = 0;
+    for (const ct of uniqueContentTokens) {
+      if (this.invertedIndex.has(ct)) {
+        inVocab++;
+      } else {
+        const alt = QueryNormalizer.inflectWord(ct);
+        if (alt && this.invertedIndex.has(alt)) {
+          inVocab++;
+        } else {
+          unknownCount++;
+        }
+      }
+    }
+    return inVocab / uniqueContentTokens.length < 0.3 || unknownCount >= 4;
+  }
+
+  private scoreLexicalQueryTokens(queryTokens: string[], scores: Float64Array): void {
+    for (const qToken of queryTokens) {
+      this.scoreToken(qToken, scores);
+      if (qToken.length >= 3) {
+        const prefixMatches = this.findPrefixMatches(qToken);
+        for (const indexToken of prefixMatches) {
+          if (indexToken !== qToken) {
+            const postings = this.invertedIndex.get(indexToken);
+            if (postings) {
+              this.scorePostings(postings, this.docCount, scores, SEARCH_PREFIX_MATCH_MULTIPLIER);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  private executeQuickPathSearch(
+    query: string,
+    queryTokens: string[],
+    topK: number,
+    activeToolNames?: ReadonlySet<string>,
+    visibleDomains?: ReadonlySet<string>,
+    profile?: ToolProfile,
+  ): { quickResults: ToolSearchResult[]; preAdjust: Float64Array; quickLatencyMs: number } {
+    const quickStartMs = performance.now();
+    const scores = this.quickPathSearch(query, queryTokens);
+    const preAdjust = capturePositiveScores(scores);
+    const quickResults = this.projectScores(
+      scores,
+      'quick',
+      query,
+      topK,
+      activeToolNames,
+      visibleDomains,
+      profile,
+      null,
+    );
+    this.feedbackTracker.recordVectorRanking(null);
+    const searchId = this.qualityTracker.recordSearch(
+      query,
+      quickResults.map((r) => r.name),
+      quickResults.map((r) => r.score),
+      performance.now() - quickStartMs,
+      { vectorParticipated: false },
+    );
+    this.rememberWitness(searchId, quickResults, null);
+    const quickLatencyMs = Math.round(performance.now() - quickStartMs);
+    return { quickResults, preAdjust, quickLatencyMs };
+  }
+
   async search(
     query: string,
     topK = 10,
@@ -499,10 +645,6 @@ export class ToolSearchEngine {
     const searchStartTime = performance.now();
 
     // ── search.query telemetry span ──
-    // Global instrumentation (not a constructor dep): the MCPServer installs the
-    // live exporter process-wide; search-tune worker processes never do, so
-    // tuning runs emit nothing and pay only no-op cost. Query text is captured
-    // per the global policy — see redactQueryText for why capture is bounded.
     const instrumentation = getGlobalInstrumentation();
     const telemetrySpan = instrumentation.startSpan(SpanNames.searchQuery, {
       'search.query_text': redactQueryText(query),
@@ -510,8 +652,30 @@ export class ToolSearchEngine {
       'search.top_k': topK,
     });
 
-    // Tokenise without synonyms first, then keep only the most informative.
-    const queryTokens = this.distillQueryTokens(this.bm25Scorer.tokenise(query));
+    // Tokenise without synonyms first, filter stop words, then keep only the most informative.
+    const rawTokens = this.bm25Scorer.tokenise(query);
+    const contentTokens = QueryNormalizer.filterQueryStopwords(rawTokens);
+    if (contentTokens.length === 0) {
+      telemetrySpan.end({ 'search.result_count': 0 });
+      instrumentation.emitMetric(MetricNames.searchQueriesTotal, 1, 'counter', {
+        outcome: 'empty_query',
+      });
+      return [];
+    }
+
+    if (this.shouldRejectOutOfDomain(contentTokens, query)) {
+      const latencyMs = performance.now() - searchStartTime;
+      telemetrySpan.end({
+        'search.result_count': 0,
+        'search.latency_ms': Math.round(latencyMs),
+      });
+      instrumentation.emitMetric(MetricNames.searchQueriesTotal, 1, 'counter', {
+        outcome: 'out_of_domain_vocab_rejection',
+      });
+      return [];
+    }
+
+    const queryTokens = this.distillQueryTokens(contentTokens);
     if (queryTokens.length === 0) {
       telemetrySpan.end({ 'search.result_count': 0 });
       instrumentation.emitMetric(MetricNames.searchQueriesTotal, 1, 'counter', {
@@ -547,31 +711,14 @@ export class ToolSearchEngine {
     // Exact tool names skip RRF and embeddings. A single token does not:
     // intent and affinity still have to run.
     if (SEARCH_SELF_RAG_ENABLED && this.isExactNameQuery(query)) {
-      const quickStartMs = performance.now();
-      const scores = this.quickPathSearch(query, queryTokens);
-      const preAdjust = capturePositiveScores(scores);
-      const quickResults = this.projectScores(
-        scores,
-        'quick',
+      const { quickResults, preAdjust, quickLatencyMs } = this.executeQuickPathSearch(
         query,
+        queryTokens,
         topK,
         activeToolNames,
         visibleDomains,
         profile,
-        null,
       );
-      // The vector signal never participates here. Clear the unbound slot so
-      // a direct tracker read cannot learn from the previous full-path search.
-      this.feedbackTracker.recordVectorRanking(null);
-      const searchId = this.qualityTracker.recordSearch(
-        query,
-        quickResults.map((r) => r.name),
-        quickResults.map((r) => r.score),
-        performance.now() - quickStartMs,
-        { vectorParticipated: false },
-      );
-      this.rememberWitness(searchId, quickResults, null);
-      const quickLatencyMs = Math.round(performance.now() - searchStartTime);
       telemetrySpan.end({
         'search.quick_path': true,
         'search.result_count': quickResults.length,
@@ -594,34 +741,28 @@ export class ToolSearchEngine {
     queryTokens.push(...synonymTokens);
 
     const explicitToolMention = this.findExplicitToolMention(query);
-
     const intentToolBonuses = this.intentBoost.resolveIntentToolBonuses(query);
-
     const scores = new Float64Array(this.docCount);
 
-    // ── BM25 scoring (existing) ──
-    for (const qToken of queryTokens) {
-      this.scoreToken(qToken, scores);
-      if (qToken.length >= 3) {
-        const prefixMatches = this.findPrefixMatches(qToken);
-        for (const indexToken of prefixMatches) {
-          if (indexToken !== qToken) {
-            const postings = this.invertedIndex.get(indexToken);
-            if (postings) {
-              this.scorePostings(postings, this.docCount, scores, SEARCH_PREFIX_MATCH_MULTIPLIER);
-            }
-          }
-        }
-      }
-    }
+    this.scoreLexicalQueryTokens(queryTokens, scores);
 
     // ── RRF multi-signal fusion (replaces multiplicative TF-IDF boost) ──
-    // Combine BM25 (already in scores), TF-IDF cosine, trigram, and vector signals
-    const { topBm25Score, vectorParticipated, vectorRanking } = await this.applyRRFFusion(
-      queryTokens,
-      query,
-      scores,
-    );
+    const { topBm25Score, vectorParticipated, vectorRanking, hasSignal } =
+      await this.applyRRFFusion(queryTokens, query, scores);
+
+    // ── Relevance Confidence Gate ──
+    if (!hasSignal && intentToolBonuses.size === 0 && explicitToolMention === null) {
+      const latencyMs = performance.now() - searchStartTime;
+      telemetrySpan.end({
+        'search.quick_path': false,
+        'search.result_count': 0,
+        'search.latency_ms': Math.round(latencyMs),
+      });
+      instrumentation.emitMetric(MetricNames.searchQueriesTotal, 1, 'counter', {
+        outcome: 'no_match_relevance_gate',
+      });
+      return [];
+    }
 
     // ── Query category adaptive domain weights (§4.1.3 task-type encoding) ──
     const categoryDomainBoosts = this.bm25Scorer.detectQueryCategoryBoosts(query);
@@ -650,6 +791,26 @@ export class ToolSearchEngine {
       profile,
       explicitToolMention,
     );
+
+    // Relevance Confidence Floor:
+    // If no explicit tool was mentioned, no intent rules fired,
+    // and the best candidate score is below the minimal noise floor (< 2.0),
+    // treat as out-of-domain noise and reject.
+    if (
+      this.docCount >= 20 &&
+      explicitToolMention === null &&
+      intentToolBonuses.size === 0 &&
+      results.length > 0 &&
+      results[0]!.score < 2.0
+    ) {
+      const latencyMs = performance.now() - searchStartTime;
+      telemetrySpan.end({ 'search.result_count': 0, 'search.latency_ms': Math.round(latencyMs) });
+      instrumentation.emitMetric(MetricNames.searchQueriesTotal, 1, 'counter', {
+        outcome: 'below_confidence_floor',
+      });
+      return [];
+    }
+
     this.writeCache(cacheKey, 'full', preAdjust, vectorRanking);
 
     // ── Search quality tracking ──
@@ -963,6 +1124,7 @@ export class ToolSearchEngine {
     topBm25Score: number;
     vectorParticipated: boolean;
     vectorRanking: Map<string, number> | null;
+    hasSignal: boolean;
   }> {
     const k = SEARCH_RRF_K;
     const trigramWeight = SEARCH_TRIGRAM_WEIGHT;
@@ -1013,34 +1175,38 @@ export class ToolSearchEngine {
       this.feedbackTracker.recordVectorRanking(vectorRanking);
     }
 
-    // ── Fuse via RRF ──
-    const fusedRrfScores = new Float64Array(this.docCount);
-    for (let i = 0; i < this.docCount; i++) {
-      let rrfScore = 0;
+    const hasSignal =
+      topBm25Score > 0 ||
+      trigramScores.size > 0 ||
+      (vectorScores !== null && vectorScores.size > 0);
 
-      const bm25Rank = bm25Ranked.get(i);
-      if (bm25Rank !== undefined) {
-        rrfScore += 1 / (k + bm25Rank);
+    // ── Fuse via RRF only if at least one signal found candidates ──
+    if (hasSignal) {
+      const fusedRrfScores = new Float64Array(this.docCount);
+      for (let i = 0; i < this.docCount; i++) {
+        let rrfScore = 0;
+
+        const bm25Rank = bm25Ranked.get(i);
+        if (bm25Rank !== undefined) {
+          rrfScore += 1 / (k + bm25Rank);
+        }
+
+        const trigramRank = trigramRanked.get(i);
+        if (trigramRank !== undefined && trigramWeight > 0) {
+          rrfScore += trigramWeight * (1 / (k + trigramRank));
+        }
+
+        const vectorRank = vectorRanked?.get(i);
+        if (vectorRank !== undefined && this.feedbackTracker.getVectorWeight() > 0) {
+          rrfScore += this.feedbackTracker.getVectorWeight() * (1 / (k + vectorRank));
+        }
+
+        fusedRrfScores[i] = rrfScore;
       }
-
-      const trigramRank = trigramRanked.get(i);
-      if (trigramRank !== undefined && trigramWeight > 0) {
-        rrfScore += trigramWeight * (1 / (k + trigramRank));
-      }
-
-      const vectorRank = vectorRanked?.get(i);
-      if (vectorRank !== undefined && this.feedbackTracker.getVectorWeight() > 0) {
-        rrfScore += this.feedbackTracker.getVectorWeight() * (1 / (k + vectorRank));
-      }
-
-      // Scale RRF score up to be comparable with original BM25 magnitude
-      // while preserving original BM25 so downstream boosts (affinity, domain
-      // hub, intent bonus) keep their absolute ordering meaning.
-      fusedRrfScores[i] = rrfScore;
+      blendRrfIntoScores(scores, fusedRrfScores);
     }
-    blendRrfIntoScores(scores, fusedRrfScores);
 
-    return { topBm25Score, vectorParticipated: vectorScores !== null, vectorRanking };
+    return { topBm25Score, vectorParticipated: vectorScores !== null, vectorRanking, hasSignal };
   }
 
   // ── Dense vector search methods (Phase 8) ──
