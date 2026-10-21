@@ -76,6 +76,24 @@ export interface ToolSearchResult {
   isActive: boolean;
 }
 
+/**
+ * Modular strategy toggles for counterfactual ablation and DreamRSI evaluation.
+ */
+export interface SearchStrategyFlags {
+  /** S1: Expand synonyms & reverse-engineering shorthands (bp, dbg, mem, etc.) */
+  enableSynonyms?: boolean;
+  /** S2: Boost scores based on inputSchema parameter & required field matching */
+  enableTypeSchema?: boolean;
+  /** S3: Out-of-domain vocabulary check and query length term-drift penalty */
+  enableOutOfDomainGating?: boolean;
+  /** S4: Platt logistic calibrated confidence floor to reject irrelevant queries */
+  enableScoreCalibration?: boolean;
+  /** S5: Maximal Marginal Relevance & category slot saturation diversification */
+  enableMMR?: boolean;
+  /** S6: Sequential ItemCF / Swing workflow transition graph boosts */
+  enableWorkflowTransitions?: boolean;
+}
+
 // ── internal types ──
 
 interface ToolDocument {
@@ -207,6 +225,16 @@ export class ToolSearchEngine {
   private readonly idfLookupTable: Float64Array;
   private readonly docNormTable: Float64Array;
   private readonly merkleTree: ToolMerkleTree;
+
+  /** Dynamic search strategy flags for ablation and DreamRSI counterfactual evaluation. */
+  private strategyFlags: Required<SearchStrategyFlags> = {
+    enableSynonyms: true,
+    enableTypeSchema: true,
+    enableOutOfDomainGating: true,
+    enableScoreCalibration: true,
+    enableMMR: true,
+    enableWorkflowTransitions: true,
+  };
 
   constructor(
     tools?: Tool[],
@@ -362,6 +390,22 @@ export class ToolSearchEngine {
   }
 
   /**
+   * Update search strategy flags dynamically (e.g. for ablation benchmarks).
+   * Automatically clears cached queries to avoid stale cross-strategy results.
+   */
+  public setStrategyFlags(flags: Partial<SearchStrategyFlags>): void {
+    this.strategyFlags = { ...this.strategyFlags, ...flags };
+    this.queryCache.clear();
+  }
+
+  /**
+   * Get current search strategy flags.
+   */
+  public getStrategyFlags(): Readonly<Required<SearchStrategyFlags>> {
+    return this.strategyFlags;
+  }
+
+  /**
    * When the query is verbose, keep only the tokens with the highest IDF.
    * Rare tokens carry more signal; out-of-vocabulary tokens are noise.
    */
@@ -432,6 +476,7 @@ export class ToolSearchEngine {
     queryTokenSet: Set<string>,
     queryNormalised: string,
     intentBonus: number,
+    hasWorkflowImmunity = false,
   ): number {
     let multiplier = 1.0;
 
@@ -444,12 +489,22 @@ export class ToolSearchEngine {
         matchedParamCount++;
       }
     }
-    if (matchedRequiredCount > 0 || matchedParamCount > 0) {
+    if (
+      this.strategyFlags.enableTypeSchema &&
+      (matchedRequiredCount > 0 || matchedParamCount > 0)
+    ) {
       const schemaBoost = 1.0 + matchedRequiredCount * 0.15 + matchedParamCount * 0.08;
       multiplier *= Math.min(schemaBoost, 1.4);
     }
 
-    if (queryTokenSet.size >= 4 && intentBonus <= 0 && doc.name !== queryNormalised) {
+    // Suppress term-drift penalty if candidate has contextual workflow transition immunity
+    if (
+      this.strategyFlags.enableOutOfDomainGating &&
+      queryTokenSet.size >= 4 &&
+      intentBonus <= 0 &&
+      !hasWorkflowImmunity &&
+      doc.name !== queryNormalised
+    ) {
       let matchedContent = 0;
       for (const qt of queryTokenSet) {
         if (doc.tokenSet.has(qt)) matchedContent++;
@@ -469,6 +524,7 @@ export class ToolSearchEngine {
     queryTokens: string[],
     intentToolBonuses: Map<string, number>,
     categoryDomainBoosts: Map<string, number>,
+    workflowBoosts?: ReadonlyMap<string, number>,
   ): void {
     const queryNormalised = query.toLowerCase().replace(/[\s-]+/g, '_');
     const queryTokenSet = new Set(queryTokens);
@@ -493,12 +549,14 @@ export class ToolSearchEngine {
         scores[i]! *= 1 + SEARCH_COVERAGE_PRECISION_FACTOR * coverage * precision;
       }
 
+      const hasWorkflowImmunity = workflowBoosts !== undefined && workflowBoosts.has(doc.name);
       scores[i]! *= this.applySchemaAndDriftAdjustments(
         doc,
         queryTokens,
         queryTokenSet,
         queryNormalised,
         intentBonus,
+        hasWorkflowImmunity,
       );
 
       const domainMultiplier = doc.domain ? (this.domainScoreMultipliers?.get(doc.domain) ?? 1) : 1;
@@ -669,7 +727,10 @@ export class ToolSearchEngine {
       return [];
     }
 
-    if (this.shouldRejectOutOfDomain(contentTokens, query)) {
+    if (
+      this.strategyFlags.enableOutOfDomainGating &&
+      this.shouldRejectOutOfDomain(contentTokens, query)
+    ) {
       const latencyMs = performance.now() - searchStartTime;
       telemetrySpan.end({
         'search.result_count': 0,
@@ -740,11 +801,46 @@ export class ToolSearchEngine {
       return quickResults;
     }
 
-    // Synonym expansion after distillation to preserve synonym signal
-    const synonymTokens = this.bm25Scorer
-      .tokenise(queryTokens.join(' '), { expandSynonyms: true })
-      .filter((t) => !queryTokens.includes(t));
-    queryTokens.push(...synonymTokens);
+    // Shorthand and abbreviation token set for selective expansion on long queries
+    const RE_SHORTHAND_TOKENS = new Set([
+      'bp',
+      'dbg',
+      'mem',
+      'disasm',
+      'syms',
+      'fn',
+      'dex',
+      'pkt',
+      'pkts',
+      'regs',
+      'rop',
+      'proc',
+      'etw',
+      'apk',
+      'ws',
+      'eval',
+      'sec',
+      'har',
+      'int',
+      'diff',
+    ]);
+
+    // Selective synonym expansion:
+    // If query is verbose (>= 4 content tokens), only expand technical shorthands
+    // to prevent broad generic synonyms (e.g. emulate -> adb) from polluting BM25 IDF
+    if (this.strategyFlags.enableSynonyms) {
+      const tokensToExpand =
+        contentTokens.length >= 4
+          ? queryTokens.filter((t) => RE_SHORTHAND_TOKENS.has(t.toLowerCase()))
+          : queryTokens;
+
+      if (tokensToExpand.length > 0) {
+        const synonymTokens = this.bm25Scorer
+          .tokenise(tokensToExpand.join(' '), { expandSynonyms: true })
+          .filter((t) => !queryTokens.includes(t));
+        queryTokens.push(...synonymTokens);
+      }
+    }
 
     const explicitToolMention = this.findExplicitToolMention(query);
     const intentToolBonuses = this.intentBoost.resolveIntentToolBonuses(query);
@@ -770,6 +866,12 @@ export class ToolSearchEngine {
       return [];
     }
 
+    // ── Session workflow transition boost (Industrial Swing/ItemCF inspired) ──
+    const workflowBoosts =
+      this.strategyFlags.enableWorkflowTransitions && activeToolNames && activeToolNames.size > 0
+        ? WorkflowTransitionGraph.getTransitionBoosts(activeToolNames)
+        : undefined;
+
     // ── Query category adaptive domain weights (§4.1.3 task-type encoding) ──
     const categoryDomainBoosts = this.bm25Scorer.detectQueryCategoryBoosts(query);
     this.applyLexicalScoreAdjustments(
@@ -778,6 +880,7 @@ export class ToolSearchEngine {
       queryTokens,
       intentToolBonuses,
       categoryDomainBoosts,
+      workflowBoosts,
     );
 
     // Applied BEFORE graph expansion so intent-targeted tools contribute
@@ -787,15 +890,12 @@ export class ToolSearchEngine {
     // ── Graph expansion: affinity + domain hub (§4.1.4) ──
     this.applyGraphExpansion(scores);
 
-    // ── Session workflow transition boost (Industrial Swing/ItemCF inspired) ──
-    if (activeToolNames && activeToolNames.size > 0) {
-      const workflowBoosts = WorkflowTransitionGraph.getTransitionBoosts(activeToolNames);
-      if (workflowBoosts.size > 0) {
-        for (let i = 0; i < this.docCount; i++) {
-          if (scores[i]! > 0) {
-            const boost = workflowBoosts.get(this.docs[i]!.name);
-            if (boost !== undefined) scores[i]! *= boost;
-          }
+    // ── Apply contextual workflow boosts to scoring vector ──
+    if (workflowBoosts && workflowBoosts.size > 0) {
+      for (let i = 0; i < this.docCount; i++) {
+        if (scores[i]! > 0) {
+          const boost = workflowBoosts.get(this.docs[i]!.name);
+          if (boost !== undefined) scores[i]! *= boost;
         }
       }
     }
@@ -817,7 +917,7 @@ export class ToolSearchEngine {
     // and the top candidate fails the query-length adaptive confidence floor,
     // treat as out-of-domain noise and reject.
     if (
-      this.docCount >= 20 &&
+      this.strategyFlags.enableScoreCalibration &&
       explicitToolMention === null &&
       intentToolBonuses.size === 0 &&
       results.length > 0 &&
@@ -907,10 +1007,14 @@ export class ToolSearchEngine {
     this.applyTierPenalty(scores, visibleDomains, profile);
     if (kind === 'full') this.promoteExplicitMention(scores, explicitToolMention);
     const ranked = this.collectRankedResults(scores, activeToolNames, topK);
-    return kind === 'full' ? this.rerankResults(query, ranked) : ranked;
+    return kind === 'full' ? this.rerankResults(query, ranked, activeToolNames) : ranked;
   }
 
-  private rerankResults(query: string, results: ToolSearchResult[]): ToolSearchResult[] {
+  private rerankResults(
+    query: string,
+    results: ToolSearchResult[],
+    activeToolNames?: ReadonlySet<string>,
+  ): ToolSearchResult[] {
     if (results.length <= 1) return results;
     const reRankInputs: ReRankInput[] = results.map((result) => ({
       toolName: result.name,
@@ -918,11 +1022,13 @@ export class ToolSearchEngine {
       domain: result.domain ?? '',
       description: this.docs[this.docNameIndex.get(result.name) ?? 0]?.description ?? '',
     }));
+    // If active session indicates a focused workflow, relax slot capping and boost relevance lambda
+    const isSessionFocused = Boolean(activeToolNames && activeToolNames.size > 0);
     const reRanked = this.reRanker.reRank(query, reRankInputs, {
       topK: results.length,
-      enableMMR: true,
-      diversityLambda: 0.85,
-      maxPerDomain: 2,
+      enableMMR: this.strategyFlags.enableMMR,
+      diversityLambda: isSessionFocused ? 0.95 : 0.85,
+      maxPerDomain: isSessionFocused ? 4 : 2,
     });
     const rankMap = new Map(reRanked.map((item, index) => [item.toolName, index]));
     return results
@@ -1324,6 +1430,12 @@ export class ToolSearchEngine {
    * this query; subsequent queries pick up the vector signal once prewarm
    * lands.
    */
+  /**
+   * Minimum cosine similarity required to enter the dense vector candidate set.
+   * Prevents high-dimensional dot-product noise from qualifying as an RRF signal.
+   */
+  private static readonly VECTOR_MIN_SIMILARITY = 0.25;
+
   private async computeVectorCosineScores(query: string): Promise<Map<number, number> | null> {
     if (!this.embeddingEngine) return null;
 
@@ -1352,7 +1464,7 @@ export class ToolSearchEngine {
       for (let j = 0; j < queryEmbedding.length; j++) {
         dot += queryEmbedding[j]! * toolEmb[j]!;
       }
-      if (dot > 0) {
+      if (dot >= ToolSearchEngine.VECTOR_MIN_SIMILARITY) {
         results.set(i, dot);
       }
     }

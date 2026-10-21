@@ -146,7 +146,13 @@ export function resolveSearchQualityToolDomain(name: string): string | null {
   if (name.startsWith('adb_') || name.startsWith('android_')) return 'adb-bridge';
   if (name.startsWith('mojo_')) return 'mojo-ipc';
   if (name.startsWith('syscall_')) return 'syscall-hook';
-  if (name.startsWith('protocol_') || name.startsWith('packet_')) return 'protocol-analysis';
+  if (
+    name.startsWith('protocol_') ||
+    name.startsWith('packet_') ||
+    name.startsWith('proto_') ||
+    name.startsWith('pcap_')
+  )
+    return 'protocol-analysis';
   if (
     name.startsWith('extension_') ||
     name === 'webhook' ||
