@@ -9877,7 +9877,8 @@ export const GENERATED_TOOL_CATALOG = [
   {
     tool: {
       name: 'get_detailed_data',
-      description: 'Retrieve large data by detailId.',
+      description:
+        'Retrieve large data by detailId. Supports slicing to prevent context window explosion.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -9888,6 +9889,14 @@ export const GENERATED_TOOL_CATALOG = [
           path: {
             type: 'string',
             description: 'Path to specific nested data',
+          },
+          offset: {
+            type: 'number',
+            description: 'Optional zero-based slice start offset for arrays/strings/keys',
+          },
+          limit: {
+            type: 'number',
+            description: 'Optional maximum slice length/count',
           },
         },
         required: ['detailId'],

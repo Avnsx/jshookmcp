@@ -64,6 +64,10 @@ import {
 import { RecordingInstrumentation } from '@tests/shared/recording-instrumentation';
 import type { MCPServerContext } from '@server/MCPServer.context';
 
+// Mirrors the private EXECUTION_EVENT_ERROR_SUMMARY_MAX_CHARS — the span
+// attribute and the event summary share one cap by design.
+const EXECUTION_EVENT_ERROR_SUMMARY_MAX_CHARS = 200;
+
 function createCtx(
   routerExecute: () => Promise<unknown>,
   instrumentation: RecordingInstrumentation,
@@ -166,12 +170,59 @@ describe('executeToolWithTracking — instrumentation wiring', () => {
     });
 
     // The failed execution is recorded as a span EVENT, and the span still ends
-    // exactly once — that is what keeps the duration honest.
+    // exactly once — that is what keeps the duration honest. The message ALSO
+    // lands on the span's end attributes: the OTLP worker persists only
+    // span.attributes, so event-only messages never reach the database.
     const execute = instrumentation.spansNamed(SpanNames.toolExecute);
     expect(execute).toHaveLength(1);
     expect(execute[0]!.ended).toBe(true);
-    expect(execute[0]!.endAttrs).toEqual({ ok: false });
+    expect(execute[0]!.endAttrs).toEqual({ ok: false, error: 'handler exploded' });
     expect(execute[0]!.events).toEqual(['error']);
+  });
+
+  it('records the failure reason of a SOFT-fail response (R.fail, no throw) on the span', async () => {
+    const ctx = createCtx(
+      async () => R.fail('Executable not found at D:/chrome/chrome.exe').json(),
+      instrumentation,
+    );
+
+    const response = await executeToolWithTracking(ctx, 'browser_launch', {});
+    expect(response).toMatchObject({ success: false });
+
+    // Soft-fail = one call + one error in metrics, same as a throw. The reason
+    // is the span attribute — this is the path telemetry previously went blind
+    // on (ok:false with no trace of WHY).
+    expect(instrumentation.metricsNamed(MetricNames.toolCallsTotal)[0]!.attrs).toEqual({
+      tool: 'browser_launch',
+      success: false,
+    });
+    const execute = instrumentation.spansNamed(SpanNames.toolExecute);
+    expect(execute).toHaveLength(1);
+    expect(execute[0]!.endAttrs).toMatchObject({ ok: false });
+    expect(execute[0]!.endAttrs).toHaveProperty(
+      'error',
+      'Executable not found at D:/chrome/chrome.exe',
+    );
+    expect(execute[0]!.events).toEqual([]);
+  });
+
+  it('omits the error attribute on successful responses and truncates long messages', async () => {
+    const longMessage = 'x'.repeat(EXECUTION_EVENT_ERROR_SUMMARY_MAX_CHARS + 50);
+    const okCtx = createCtx(async () => R.ok().merge({ anything: 1 }).json(), instrumentation);
+    await executeToolWithTracking(okCtx, 'page_navigate', {});
+    const okExecute = instrumentation.spansNamed(SpanNames.toolExecute);
+    expect(okExecute[0]!.endAttrs).toEqual({ ok: true });
+    expect(okExecute[0]!.endAttrs).not.toHaveProperty('error');
+
+    const failCtx = createCtx(async () => R.fail(longMessage).json(), instrumentation);
+    await executeToolWithTracking(failCtx, 'page_navigate', {});
+    const failExecute = instrumentation.spansNamed(SpanNames.toolExecute);
+    expect(failExecute).toHaveLength(2);
+    // Truncation must PRESERVE the reason: first 200 chars + ellipsis marker,
+    // not any short string the implementation happens to substitute.
+    const err = (failExecute[1]!.endAttrs as Record<string, unknown>)['error'];
+    expect(err).toBe(`${'x'.repeat(EXECUTION_EVENT_ERROR_SUMMARY_MAX_CHARS)}…`);
+    expect((failExecute[1]!.endAttrs as Record<string, unknown>)['ok']).toBe(false);
   });
 
   it('emits nothing when the execution gate denies the call', async () => {

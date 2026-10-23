@@ -2720,6 +2720,14 @@
             "description": "Detail ID from previous response",
             "type": "string"
           },
+          "limit": {
+            "description": "Optional maximum slice length/count",
+            "type": "number"
+          },
+          "offset": {
+            "description": "Optional zero-based slice start offset for arrays/strings/keys",
+            "type": "number"
+          },
           "path": {
             "description": "Path to specific nested data",
             "type": "string"
@@ -22669,7 +22677,7 @@
     },
     "/browser/get_detailed_data": {
       "post": {
-        "description": "Retrieve large data by detailId.",
+        "description": "Retrieve large data by detailId. Supports slicing to prevent context window explosion.",
         "operationId": "get_detailed_data",
         "requestBody": {
           "content": {

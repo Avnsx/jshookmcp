@@ -1131,8 +1131,13 @@ describe('BrowserControlHandlers – handleBrowserAttach', () => {
       ),
     );
 
-    expect(closes.slice(0, -1).every((body) => body.browserClosed === false)).toBe(true);
-    expect(closes.at(-1).browserClosed).toBe(true);
+    // Order-invariant assertion: exactly one close tears down the browser and
+    // the other nine release their lease without closing. Asserting on the
+    // array prefix/suffix (which close happened "last") is a completion-order
+    // flake under loaded CI runners — Promise.all's array position does not
+    // track lease-release order deterministically.
+    expect(closes.filter((body) => body.browserClosed === true)).toHaveLength(1);
+    expect(closes.filter((body) => body.browserClosed === false)).toHaveLength(9);
     expect(m.collector.close).toHaveBeenCalledOnce();
     expect(m.consoleMonitor.disable).toHaveBeenCalledTimes(10);
   });

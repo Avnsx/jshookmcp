@@ -98,6 +98,47 @@ function truncateErrorSummary(error: unknown): string {
     : message;
 }
 
+/**
+ * Extract the failure reason from a soft-fail ToolResponse (handler returned
+ * without throwing). ResponseBuilder.fail() writes the message to both
+ * `payload.error` and `payload.message`; structured responses carry it on the
+ * envelope or inside the text content. Returns null when the response does not
+ * report a failure or carries no extractable message — a successful response
+ * must never contribute an `error` span attribute.
+ */
+function extractResponseErrorMessage(response: unknown): string | null {
+  if (!response || typeof response !== 'object') return null;
+  const r = response as Record<string, unknown>;
+  if (r.isError !== true && r.success !== false) return null;
+  const candidates: unknown[] = [
+    r.error,
+    r.message,
+    r.structuredContent && typeof r.structuredContent === 'object'
+      ? (r.structuredContent as Record<string, unknown>).error
+      : undefined,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.length > 0) {
+      return truncateErrorSummary(new Error(candidate));
+    }
+  }
+  // Last resort: parse the first text content block (ResponseBuilder.json()
+  // serialises the payload into it; raw non-ResponseBuilder handlers encode
+  // `success:false, error:"..."` there directly).
+  const first = (r.content as { type?: string; text?: unknown }[] | undefined)?.[0];
+  if (first?.type === 'text' && typeof first.text === 'string') {
+    try {
+      const parsed = JSON.parse(first.text) as Record<string, unknown>;
+      if (typeof parsed.error === 'string' && parsed.error.length > 0) {
+        return truncateErrorSummary(new Error(parsed.error));
+      }
+    } catch {
+      /* not JSON — no message to extract */
+    }
+  }
+  return null;
+}
+
 export function estimateBrowserSessionToolCostMs(toolName: string, args: ToolArgs): number {
   for (const key of DIRECT_COST_KEYS) {
     const value = finitePositiveNumber(args[key]);
@@ -320,10 +361,22 @@ export async function executeToolWithTracking(ctx: MCPServerContext, name: strin
               toolName: name,
               domain: toolDomain,
             });
-            // `handlerReturned` means "did not throw". A tool that returns
-            // `isError: true` is a successful execution with a failed result —
-            // that distinction belongs to the metrics, not to this span.
+            // `handlerReturned` means "did not throw" — a narrow mechanical
+            // fact, NOT the span's success status. The span's `ok` below is
+            // the response-level verdict (same semantics as toolCallsTotal's
+            // `success`): a soft-fail response (isError/success:false, no
+            // throw) reports ok:false WITH its reason, where the comment's
+            // older "that distinction belongs to the metrics, not to this
+            // span" claim no longer holds — the span and the metric must
+            // agree, which is the whole point of the paired emission.
             let handlerReturned = false;
+            // Truncated error message for the span's END attributes. The OTLP
+            // worker persists only `span.attributes` — span events are dropped
+            // in transit — so a message that lives solely on addEvent() is
+            // invisible downstream. Soft-fail responses (R.fail(), no throw)
+            // carry their reason only in the payload, so both paths funnel
+            // through this one variable.
+            let spanErrorMessage: string | null = null;
             try {
               if (browserCoordinator) {
                 await browserCoordinator.restoreSessionContext(sessionId);
@@ -342,17 +395,27 @@ export async function executeToolWithTracking(ctx: MCPServerContext, name: strin
               ctx.contextGuard.recordCall(name);
               const enrichedResponse = ctx.contextGuard.enrichResponse(name, response);
               handlerReturned = true;
+              spanErrorMessage = extractResponseErrorMessage(enrichedResponse);
               return enrichedResponse;
             } catch (error) {
+              spanErrorMessage = truncateErrorSummary(error);
               // Recorded as a span event rather than a second end(): keeping a
               // single end path in `finally` is what keeps the duration honest.
               executeSpan.addEvent('error', {
-                message: error instanceof Error ? error.message : String(error),
+                message: spanErrorMessage,
               });
               throw error;
             } finally {
               executeSpan.end({
-                ok: handlerReturned,
+                // "ok" = handler ran AND the response reports success. A soft
+                // fail (R.fail without a throw) previously left ok:true here
+                // while the paired toolCallsTotal metric said success:false —
+                // the two sinks disagreeing is exactly the drift the paired
+                // emission was built to prevent. soft-fail error message rides
+                // the same extract below.
+                ok: handlerReturned && spanErrorMessage === null,
+                // Always emitted on failure (soft or thrown); never on success.
+                ...(spanErrorMessage !== null ? { error: spanErrorMessage } : {}),
                 // Argument capture per the global tool-args policy: default
                 // records ONLY key names (shape) — values need an explicit
                 // JSHOOK_OTLP_TOOL_ARGS opt-in and are credential-scrubbed.
