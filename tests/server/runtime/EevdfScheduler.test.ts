@@ -112,7 +112,13 @@ describe('EevdfScheduler (Earliest Eligible Virtual Deadline First)', () => {
     });
 
     const sysVTime = scheduler.getSystemVirtualTime();
-    expect(sysVTime).toBeGreaterThanOrEqual(100);
+    // The heavy task charges its ACTUAL wall-clock duration (>= min 1ms, <=
+    // maxCostMs), so the floor is "meaningful progress", not the full 100ms —
+    // under loaded CI the timer can fire at ~99ms and Date.now() deltas
+    // undershoot. Assert the invariant the clamp below needs: system virtual
+    // time advanced well past maxLagMs so a clamp to sysVTime - maxLagMs is
+    // distinguishable from vruntime = 0.
+    expect(sysVTime).toBeGreaterThanOrEqual(90);
 
     // Now an old session that was idle at vruntime = 0 schedules again
     // Its lag should be clamped so vruntime >= sysVTime - maxLagMs (>= 50)
