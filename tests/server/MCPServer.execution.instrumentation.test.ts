@@ -218,9 +218,10 @@ describe('executeToolWithTracking — instrumentation wiring', () => {
     await executeToolWithTracking(failCtx, 'page_navigate', {});
     const failExecute = instrumentation.spansNamed(SpanNames.toolExecute);
     expect(failExecute).toHaveLength(2);
+    // Truncation must PRESERVE the reason: first 200 chars + ellipsis marker,
+    // not any short string the implementation happens to substitute.
     const err = (failExecute[1]!.endAttrs as Record<string, unknown>)['error'];
-    expect(typeof err).toBe('string');
-    expect((err as string).length).toBeLessThanOrEqual(EXECUTION_EVENT_ERROR_SUMMARY_MAX_CHARS + 1);
+    expect(err).toBe(`${'x'.repeat(EXECUTION_EVENT_ERROR_SUMMARY_MAX_CHARS)}…`);
     expect((failExecute[1]!.endAttrs as Record<string, unknown>)['ok']).toBe(false);
   });
 

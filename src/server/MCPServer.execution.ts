@@ -361,9 +361,14 @@ export async function executeToolWithTracking(ctx: MCPServerContext, name: strin
               toolName: name,
               domain: toolDomain,
             });
-            // `handlerReturned` means "did not throw". A tool that returns
-            // `isError: true` is a successful execution with a failed result —
-            // that distinction belongs to the metrics, not to this span.
+            // `handlerReturned` means "did not throw" — a narrow mechanical
+            // fact, NOT the span's success status. The span's `ok` below is
+            // the response-level verdict (same semantics as toolCallsTotal's
+            // `success`): a soft-fail response (isError/success:false, no
+            // throw) reports ok:false WITH its reason, where the comment's
+            // older "that distinction belongs to the metrics, not to this
+            // span" claim no longer holds — the span and the metric must
+            // agree, which is the whole point of the paired emission.
             let handlerReturned = false;
             // Truncated error message for the span's END attributes. The OTLP
             // worker persists only `span.attributes` — span events are dropped
