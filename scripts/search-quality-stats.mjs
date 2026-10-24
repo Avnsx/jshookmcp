@@ -6,7 +6,10 @@
  * (`~/.jshookmcp/state/search-quality.json`, written by the
  * RuntimeSnapshotScheduler) and prints the share of real queries whose top
  * raw BM25 score falls below the vector skip threshold
- * (SEARCH_VECTOR_BM25_SKIP_THRESHOLD, default 8 — env-overridable here).
+ * (SEARCH_VECTOR_BM25_SKIP_THRESHOLD — falls back to the runtime default 0;
+ * env-overridable here). The runtime reads the same env key through
+ * `src/constants/search.ts`, so an unset environment reports the same cutoff
+ * the server actually uses.
  *
  * Decision guidance (see .ccg memory "search-engine-improvements-acbd"):
  *   - weakRatio ≈ 0  → the vector path never engages on real traffic;
@@ -25,7 +28,9 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { resolve } from 'node:path';
 
-const THRESHOLD = Number(process.env.SEARCH_VECTOR_BM25_SKIP_THRESHOLD ?? 8);
+// Mirror the runtime default in src/constants/search.ts (currently 0 — vector
+// canary). When the runtime default changes, change this fallback in lockstep.
+const THRESHOLD = Number(process.env.SEARCH_VECTOR_BM25_SKIP_THRESHOLD ?? 0);
 const STATE_PATH = resolve(homedir(), '.jshookmcp', 'state', 'search-quality.json');
 
 function percentile(sorted, p) {

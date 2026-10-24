@@ -38,7 +38,7 @@ import { loadToolEmbeddingsCachePartial, saveToolEmbeddingsCacheV2 } from './Emb
 import { IntentBoostImpl } from './IntentBoost';
 import { TrigramIndex } from './TrigramIndex';
 import { FeedbackTracker } from './FeedbackTracker';
-import { ENGLISH_STOP_WORDS, QueryNormalizer } from './QueryNormalizer';
+import { QueryNormalizer } from './QueryNormalizer';
 import { ReRanker, type ReRankInput, type ToolMetadata } from './ReRanker';
 import { ScoreCalibrator } from './ScoreCalibrator';
 import { WorkflowTransitionGraph } from './WorkflowTransitionGraph';
@@ -733,13 +733,14 @@ export class ToolSearchEngine {
     }
 
     // Degenerate-probe gate: a pure-stopword query (e.g. "a") survives the
-    // filter only through the keep-original-tokens fallback and carries no
-    // retrievable intent. Quick-path (exact tool-name) queries are exempt.
+    // filter only through the keep-original-tokens fallback, and any query
+    // whose content-token count sits below the configured minimum carries too
+    // little retrievable intent to rank meaningfully. Quick-path (exact
+    // tool-name) queries are exempt.
     if (
       SEARCH_MIN_CONTENT_TOKENS > 0 &&
       !this.isExactNameQuery(query) &&
-      rawTokens.length > 0 &&
-      rawTokens.every((t) => ENGLISH_STOP_WORDS.has(t.toLowerCase()))
+      contentTokens.length < SEARCH_MIN_CONTENT_TOKENS
     ) {
       telemetrySpan.end({ 'search.result_count': 0 });
       instrumentation.emitMetric(MetricNames.searchQueriesTotal, 1, 'counter', {
@@ -1406,6 +1407,9 @@ export class ToolSearchEngine {
           if (missingIndexes.length === 0) {
             this.toolEmbeddings = partial as Float32Array[];
             this.embeddingRetryAfterMs = 0;
+            // Queries served while embeddings were absent cached lexical-only
+            // results; with the vector signal now live those entries are stale.
+            this.queryCache.clear();
             return;
           }
           const fresh = await engine.embedBatch(
@@ -1421,6 +1425,9 @@ export class ToolSearchEngine {
 
         this.toolEmbeddings = embeddings;
         this.embeddingRetryAfterMs = 0;
+        // Same staleness as the all-cached fast path: results computed before
+        // embeddings existed must not outlive the readiness transition.
+        this.queryCache.clear();
         await saveToolEmbeddingsCacheV2(modelId, tools, embeddings);
       } catch (error) {
         // Embeddings are optional; BM25 and trigram remain available.

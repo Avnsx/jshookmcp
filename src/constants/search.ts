@@ -76,9 +76,10 @@ export const SEARCH_DOMAIN_HUB_THRESHOLD = int('SEARCH_DOMAIN_HUB_THRESHOLD', 5)
 export const SEARCH_QUERY_CACHE_CAPACITY = int('SEARCH_QUERY_CACHE_CAPACITY', 500);
 
 /**
- * Minimum content-token count a full-path query must carry. Degenerate probes
- * that survive stopword filtering only via the "keep original tokens" fallback
- * (e.g. the query "a") previously flowed into BM25 and returned ranking noise.
+ * Minimum content-token count a full-path query must carry after stopword
+ * filtering. Queries below the minimum (including pure-stopword probes like
+ * "a", which survive filtering only via the "keep original tokens" fallback)
+ * return no results instead of flowing into BM25 ranking noise.
  * 0 disables the gate. Quick-path (exact tool-name) queries are exempt — they
  * are validated by isExactNameQuery before this gate would run.
  */

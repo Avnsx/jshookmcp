@@ -64,9 +64,10 @@ export class BreakpointBasicHandlers {
       });
     } else {
       throw new Error(
-        'Either url or scriptId must be provided. Use type=code with a url pattern ' +
-          '(breakpoint on every matching script) or the scriptId from get_script_source / ' +
-          'browser_list_tabs. List loaded scripts first if you do not have a scriptId yet.',
+        "Either url or scriptId must be provided. Use type=code with the script's exact " +
+          'URL (wildcard patterns do not match — Debugger.setBreakpointByUrl only resolves ' +
+          'exact URLs) or the scriptId from get_script_source / browser_list_tabs. ' +
+          'List loaded scripts first if you do not have a scriptId yet.',
       );
     }
 

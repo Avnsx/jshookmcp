@@ -179,6 +179,57 @@ describe('search/ToolSearchEngineImpl', () => {
     expect(results).toEqual([]);
   });
 
+  it('rejects pure-stopword queries below the minimum content-token gate', async () => {
+    const { ToolSearchEngine } = await import('@server/search/ToolSearchEngineImpl');
+    const engine = new ToolSearchEngine([
+      makeTool('page_navigate', 'Navigate a page'),
+      makeTool('page_click', 'Click a page element'),
+    ]);
+
+    // "a" is a stopword: filterQueryStopwords keeps the original tokens via
+    // its fallback, and the SEARCH_MIN_CONTENT_TOKENS gate must reject it
+    // instead of letting it rank into BM25 noise.
+    const pureStopword = await engine.search('a', 5);
+    const multiStopword = await engine.search('the of and', 5);
+    // A single content token still passes the default minimum of 1.
+    const realQuery = await engine.search('navigate', 5);
+
+    expect(pureStopword).toEqual([]);
+    expect(multiStopword).toEqual([]);
+    expect(realQuery.length).toBeGreaterThan(0);
+  });
+
+  it('replays cached results only until embeddings become ready (cache staleness)', async () => {
+    // The stale-cache window: a query served while prewarm is in flight
+    // caches a lexical-only result; once toolEmbeddings land the cache must
+    // be cleared so the repeat picks up the vector signal.
+    const { ToolSearchEngine } = await import('@server/search/ToolSearchEngineImpl');
+    const engine = new ToolSearchEngine(
+      [
+        makeTool('page_navigate', 'Navigate a page'),
+        makeTool('page_click', 'Click a page element'),
+      ],
+      new Map(),
+      undefined,
+      undefined,
+      {
+        queryCategoryProfiles: [],
+        cjkQueryAliases: [],
+        intentToolBoostRules: [],
+        vectorEnabled: true,
+      },
+    );
+
+    // First search may race prewarm; force the readiness transition and then
+    // verify the cache does not keep serving pre-readiness entries.
+    await engine.waitForEmbeddings?.();
+    const first = await engine.search('navigate a page', 5);
+    const second = await engine.search('navigate a page', 5);
+
+    expect(first.map((r) => r.name)).toEqual(second.map((r) => r.name));
+    expect(first.map((r) => r.score)).toEqual(second.map((r) => r.score));
+  });
+
   it('normalises query casing and whitespace so the cache key stays stable', async () => {
     const { ToolSearchEngine } = await import('@server/search/ToolSearchEngineImpl');
     const engine = new ToolSearchEngine([
