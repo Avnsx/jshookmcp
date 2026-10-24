@@ -480,10 +480,18 @@ describe('SearchQualityTracker', () => {
     });
 
     it('computes weak ratio over full-path records below the skip threshold', () => {
+      // Relative to the live threshold, so this stays valid whichever default
+      // SEARCH_VECTOR_BM25_SKIP_THRESHOLD ships with (0 canary, 8 original).
       const threshold = SEARCH_VECTOR_BM25_SKIP_THRESHOLD;
-      tracker.recordSearch('q1', ['a'], [0.9], 5, { bm25TopScore: threshold - 2 });
-      tracker.recordSearch('q2', ['b'], [0.9], 5, { bm25TopScore: threshold + 1 });
-      tracker.recordSearch('q3', ['c'], [0.9], 5, { bm25TopScore: threshold - 0.5 });
+      // With threshold 0 nothing can be "below" it; pin an offset-based
+      // classification instead so the weak/confident split stays exercised.
+      const weakScore = threshold === 0 ? -1 : threshold - 2;
+      const confidentScore = threshold === 0 ? 1 : threshold + 1;
+      tracker.recordSearch('q1', ['a'], [0.9], 5, { bm25TopScore: weakScore });
+      tracker.recordSearch('q2', ['b'], [0.9], 5, { bm25TopScore: confidentScore });
+      tracker.recordSearch('q3', ['c'], [0.9], 5, {
+        bm25TopScore: threshold === 0 ? -0.5 : threshold - 0.5,
+      });
       // Quick-path record excluded from the denominator.
       tracker.recordSearch('q4', ['d'], [0.9], 5, { vectorParticipated: false });
 
@@ -511,8 +519,11 @@ describe('SearchQualityTracker', () => {
     });
 
     it('restores the additive fields from a snapshot', () => {
+      // A score below the live threshold classifies as weak regardless of
+      // what the current default is (0 canary / 8 original).
+      const weakScore = SEARCH_VECTOR_BM25_SKIP_THRESHOLD === 0 ? -3 : 3;
       tracker.recordSearch('q1', ['a'], [0.9], 5, {
-        bm25TopScore: 3,
+        bm25TopScore: weakScore,
         vectorParticipated: true,
       });
       const snapshot = tracker.exportSnapshot();
@@ -520,7 +531,7 @@ describe('SearchQualityTracker', () => {
       const restored = new SearchQualityTracker();
       restored.restoreSnapshot(snapshot);
       const record = restored.getRecentRecords()[0]!;
-      expect(record.bm25TopScore).toBe(3);
+      expect(record.bm25TopScore).toBe(weakScore);
       expect(record.vectorParticipated).toBe(true);
       expect(restored.computeMetrics().bm25WeakQueries).toBe(1);
     });

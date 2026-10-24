@@ -76,6 +76,15 @@ export const SEARCH_DOMAIN_HUB_THRESHOLD = int('SEARCH_DOMAIN_HUB_THRESHOLD', 5)
 export const SEARCH_QUERY_CACHE_CAPACITY = int('SEARCH_QUERY_CACHE_CAPACITY', 500);
 
 /**
+ * Minimum content-token count a full-path query must carry. Degenerate probes
+ * that survive stopword filtering only via the "keep original tokens" fallback
+ * (e.g. the query "a") previously flowed into BM25 and returned ranking noise.
+ * 0 disables the gate. Quick-path (exact tool-name) queries are exempt — they
+ * are validated by isExactNameQuery before this gate would run.
+ */
+export const SEARCH_MIN_CONTENT_TOKENS = int('SEARCH_MIN_CONTENT_TOKENS', 1);
+
+/**
  * Cache invalidation tolerance: cached entries are reusable while the
  * live vector weight stays within this delta of the weight recorded
  * when the entry was stored. Avoids flushing the full cache on every
@@ -202,11 +211,29 @@ export const SEARCH_VECTOR_LEARN_TOP_N = int('SEARCH_VECTOR_LEARN_TOP_N', 3);
  * this value, dense vector scoring is skipped — the text signal is already
  * strong enough that embeddings rarely change the ranking.
  * Set to 0 to always run vector scoring (original behavior).
+ *
+ * Default 0 since 2026-10-24: production telemetry (D1 jshookmcp-telemetry,
+ * 2238 search.query spans over 19 days) showed the skip threshold fired on
+ * 99.8% of real queries (only 4 of 2238 below BM25 score 8), making the
+ * vector signal structurally unreachable — vector_participated was 0.00%
+ * in the wild despite being enabled by default. Canary-verified with the
+ * threshold disabled so the hybrid fusion actually runs and its gain can
+ * be measured via search.query telemetry (full_path_vector outcome share).
+ * Re-enable a non-zero threshold only if full_path_lexical vs
+ * full_path_vector quality parity is demonstrated.
  */
-export const SEARCH_VECTOR_BM25_SKIP_THRESHOLD = float('SEARCH_VECTOR_BM25_SKIP_THRESHOLD', 8);
+export const SEARCH_VECTOR_BM25_SKIP_THRESHOLD = float('SEARCH_VECTOR_BM25_SKIP_THRESHOLD', 0);
 
-/** Start catalog embedding work at construction time instead of on first vector search. */
-export const SEARCH_VECTOR_PREWARM = bool('SEARCH_VECTOR_PREWARM', false);
+/**
+ * Start catalog embedding work at construction time instead of on first vector search.
+ *
+ * Default true since 2026-10-24: with SEARCH_VECTOR_BM25_SKIP_THRESHOLD
+ * disabled, vector scoring runs on every full-path query, so the lazy
+ * first-query model download would land on user-visible latency instead of
+ * background warmup. Prewarm keeps the one-time HF download off the query
+ * path; failure degrades to lexical for SEARCH_VECTOR_RETRY_COOLDOWN_MS.
+ */
+export const SEARCH_VECTOR_PREWARM = bool('SEARCH_VECTOR_PREWARM', true);
 
 /** Release the embedding worker after this idle window. Set to 0 to keep it resident. */
 export const SEARCH_VECTOR_WORKER_IDLE_MS = int(

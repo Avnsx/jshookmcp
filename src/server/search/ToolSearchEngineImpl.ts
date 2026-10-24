@@ -18,6 +18,7 @@ import {
   SEARCH_RECENCY_WINDOW_MS,
   SEARCH_RRF_K,
   SEARCH_SCENE_KEYWORD_WEIGHT,
+  SEARCH_MIN_CONTENT_TOKENS,
   SEARCH_SELF_RAG_ENABLED,
   SEARCH_TIER_PENALTY,
   SEARCH_TIER_PENALTY_SEARCH,
@@ -37,7 +38,7 @@ import { loadToolEmbeddingsCachePartial, saveToolEmbeddingsCacheV2 } from './Emb
 import { IntentBoostImpl } from './IntentBoost';
 import { TrigramIndex } from './TrigramIndex';
 import { FeedbackTracker } from './FeedbackTracker';
-import { QueryNormalizer } from './QueryNormalizer';
+import { ENGLISH_STOP_WORDS, QueryNormalizer } from './QueryNormalizer';
 import { ReRanker, type ReRankInput, type ToolMetadata } from './ReRanker';
 import { ScoreCalibrator } from './ScoreCalibrator';
 import { WorkflowTransitionGraph } from './WorkflowTransitionGraph';
@@ -410,9 +411,13 @@ export class ToolSearchEngine {
    * Rare tokens carry more signal; out-of-vocabulary tokens are noise.
    */
   private distillQueryTokens(queryTokens: string[]): string[] {
-    if (queryTokens.length <= 6) return queryTokens;
+    // Always return a fresh array: the caller pushes synonym expansions into
+    // the result, and an aliased reference would also mutate the caller's
+    // contentTokens — inflating the confidence-floor query length (L=10 for a
+    // 3-token query) and spuriously rejecting short queries.
+    if (queryTokens.length <= 6) return [...queryTokens];
     const inVocab = queryTokens.filter((t) => this.invertedIndex.has(t));
-    if (inVocab.length < 3) return queryTokens;
+    if (inVocab.length < 3) return [...queryTokens];
     const scored = inVocab.map((t) => {
       const df = this.invertedIndex.get(t)!.length;
       const idf = this.idfLookupTable[df] ?? 0;
@@ -720,6 +725,22 @@ export class ToolSearchEngine {
     const rawTokens = this.bm25Scorer.tokenise(query);
     const contentTokens = QueryNormalizer.filterQueryStopwords(rawTokens);
     if (contentTokens.length === 0) {
+      telemetrySpan.end({ 'search.result_count': 0 });
+      instrumentation.emitMetric(MetricNames.searchQueriesTotal, 1, 'counter', {
+        outcome: 'empty_query',
+      });
+      return [];
+    }
+
+    // Degenerate-probe gate: a pure-stopword query (e.g. "a") survives the
+    // filter only through the keep-original-tokens fallback and carries no
+    // retrievable intent. Quick-path (exact tool-name) queries are exempt.
+    if (
+      SEARCH_MIN_CONTENT_TOKENS > 0 &&
+      !this.isExactNameQuery(query) &&
+      rawTokens.length > 0 &&
+      rawTokens.every((t) => ENGLISH_STOP_WORDS.has(t.toLowerCase()))
+    ) {
       telemetrySpan.end({ 'search.result_count': 0 });
       instrumentation.emitMetric(MetricNames.searchQueriesTotal, 1, 'counter', {
         outcome: 'empty_query',
