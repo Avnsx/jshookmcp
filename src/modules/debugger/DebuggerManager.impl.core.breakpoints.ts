@@ -61,13 +61,18 @@ async function ensureUsableSession(coreCtx: BreakpointsCoreContext): Promise<voi
       `Debugger auto-reconnect failed: ${err instanceof Error ? err.message : String(err)}`,
     );
     throw new PrerequisiteError(
-      'Debugger is not enabled and auto-reconnect failed. Call init() or enable() first.',
+      'Debugger is not enabled and auto-reconnect failed. ' +
+        'Run browser_launch/browser_attach first if no browser session exists, then ' +
+        'debugger_lifecycle(action="enable"). Retry without changes will fail again.',
     );
   }
   // ensureSession may "succeed" without restoring a session — never touch a
   // null cdpSession afterwards.
   if (!coreCtx.cdpSession) {
-    throw new PrerequisiteError('Debugger auto-reconnect did not restore the CDP session.');
+    throw new PrerequisiteError(
+      'Debugger auto-reconnect did not restore the CDP session. ' +
+        'Call debugger_lifecycle(action="enable") to re-initialise; do not retry unchanged.',
+    );
   }
 }
 
@@ -248,16 +253,23 @@ export async function removeBreakpointCore(ctx: unknown, breakpointId: string): 
   const coreCtx = asBreakpointsCoreContext(ctx);
 
   if (!coreCtx.enabled || !coreCtx.cdpSession) {
-    throw new PrerequisiteError('Debugger is not enabled. Call init() or enable() first.');
+    throw new PrerequisiteError(
+      'Debugger is not enabled. Call debugger_lifecycle(action="enable") first; ' +
+        'retrying this remove without enabling will fail again.',
+    );
   }
 
   if (!breakpointId) {
-    throw new Error('breakpointId parameter is required');
+    throw new Error(
+      'breakpointId parameter is required. Use breakpoint(action="list", type="code") to ' +
+        'see active breakpoint IDs.',
+    );
   }
 
   if (!coreCtx.breakpoints.has(breakpointId)) {
     throw new Error(
-      `Breakpoint not found: ${breakpointId}. Use listBreakpoints() to see active breakpoints.`,
+      `Breakpoint not found: ${breakpointId}. It may already have been removed. ` +
+        'Call breakpoint(action="list") for active IDs — do not retry the same remove.',
     );
   }
 

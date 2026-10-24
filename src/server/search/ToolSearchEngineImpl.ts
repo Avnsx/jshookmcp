@@ -18,6 +18,7 @@ import {
   SEARCH_RECENCY_WINDOW_MS,
   SEARCH_RRF_K,
   SEARCH_SCENE_KEYWORD_WEIGHT,
+  SEARCH_MIN_CONTENT_TOKENS,
   SEARCH_SELF_RAG_ENABLED,
   SEARCH_TIER_PENALTY,
   SEARCH_TIER_PENALTY_SEARCH,
@@ -410,9 +411,13 @@ export class ToolSearchEngine {
    * Rare tokens carry more signal; out-of-vocabulary tokens are noise.
    */
   private distillQueryTokens(queryTokens: string[]): string[] {
-    if (queryTokens.length <= 6) return queryTokens;
+    // Always return a fresh array: the caller pushes synonym expansions into
+    // the result, and an aliased reference would also mutate the caller's
+    // contentTokens — inflating the confidence-floor query length (L=10 for a
+    // 3-token query) and spuriously rejecting short queries.
+    if (queryTokens.length <= 6) return [...queryTokens];
     const inVocab = queryTokens.filter((t) => this.invertedIndex.has(t));
-    if (inVocab.length < 3) return queryTokens;
+    if (inVocab.length < 3) return [...queryTokens];
     const scored = inVocab.map((t) => {
       const df = this.invertedIndex.get(t)!.length;
       const idf = this.idfLookupTable[df] ?? 0;
@@ -720,6 +725,23 @@ export class ToolSearchEngine {
     const rawTokens = this.bm25Scorer.tokenise(query);
     const contentTokens = QueryNormalizer.filterQueryStopwords(rawTokens);
     if (contentTokens.length === 0) {
+      telemetrySpan.end({ 'search.result_count': 0 });
+      instrumentation.emitMetric(MetricNames.searchQueriesTotal, 1, 'counter', {
+        outcome: 'empty_query',
+      });
+      return [];
+    }
+
+    // Degenerate-probe gate: a pure-stopword query (e.g. "a") survives the
+    // filter only through the keep-original-tokens fallback, and any query
+    // whose content-token count sits below the configured minimum carries too
+    // little retrievable intent to rank meaningfully. Quick-path (exact
+    // tool-name) queries are exempt.
+    if (
+      SEARCH_MIN_CONTENT_TOKENS > 0 &&
+      !this.isExactNameQuery(query) &&
+      contentTokens.length < SEARCH_MIN_CONTENT_TOKENS
+    ) {
       telemetrySpan.end({ 'search.result_count': 0 });
       instrumentation.emitMetric(MetricNames.searchQueriesTotal, 1, 'counter', {
         outcome: 'empty_query',
@@ -1385,6 +1407,9 @@ export class ToolSearchEngine {
           if (missingIndexes.length === 0) {
             this.toolEmbeddings = partial as Float32Array[];
             this.embeddingRetryAfterMs = 0;
+            // Queries served while embeddings were absent cached lexical-only
+            // results; with the vector signal now live those entries are stale.
+            this.queryCache.clear();
             return;
           }
           const fresh = await engine.embedBatch(
@@ -1400,6 +1425,9 @@ export class ToolSearchEngine {
 
         this.toolEmbeddings = embeddings;
         this.embeddingRetryAfterMs = 0;
+        // Same staleness as the all-cached fast path: results computed before
+        // embeddings existed must not outlive the readiness transition.
+        this.queryCache.clear();
         await saveToolEmbeddingsCacheV2(modelId, tools, embeddings);
       } catch (error) {
         // Embeddings are optional; BM25 and trigram remain available.
