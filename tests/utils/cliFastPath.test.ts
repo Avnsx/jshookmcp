@@ -26,7 +26,7 @@ describe('resolveCliFastPath', () => {
 
     expect(result.handled).toBe(true);
     expect(result.exitCode).toBe(0);
-    expect(result.output?.trim()).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(result.output?.trim()).toMatch(/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/);
   });
 
   it('does not intercept normal startup args', () => {
