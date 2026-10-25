@@ -190,6 +190,10 @@ vi.mock('@server/ToolSearch', () => ({
       state.constructors.push({ args });
     }
 
+    async vectorModelNotice() {
+      return undefined;
+    }
+
     search(query: string, topK: number, activeNames?: Set<string>) {
       state.searches.push({
         query,

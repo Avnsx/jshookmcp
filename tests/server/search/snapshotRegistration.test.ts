@@ -178,6 +178,7 @@ describe('handler registration wiring', () => {
     // instances; both must end up in the scheduler after one search.
     const engine = {
       search: vi.fn(async () => []),
+      vectorModelNotice: vi.fn(async () => undefined),
       getFeedbackTracker: () => ({ isPersistDirty: () => false }),
       getSearchQualityTracker: () => ({
         getEnhancementSuggestions: () => null,
@@ -210,6 +211,7 @@ describe('handler registration wiring', () => {
     // ctx without domain instances (bare test context) must not throw.
     const engine = {
       search: vi.fn(async () => []),
+      vectorModelNotice: vi.fn(async () => undefined),
       getFeedbackTracker: () => ({ isPersistDirty: () => false }),
       getSearchQualityTracker: () => ({
         getEnhancementSuggestions: () => null,

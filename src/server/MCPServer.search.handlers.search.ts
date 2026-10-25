@@ -35,6 +35,8 @@ export async function handleSearchTools(
   await registerSearchSnapshotSourcesFromCtx(ctx, engine);
   const activeNames = getActiveToolNames(ctx);
   const visibleDomains = getVisibleDomainsForTier(ctx);
+  // Before the search, which may start the model download the notice announces.
+  const modelNotice = await engine.vectorModelNotice();
   let results = await engine.search(query, topK, activeNames, visibleDomains, getBaseTier(ctx));
   const latencyMs = Math.round(performance.now() - searchStart);
 
@@ -184,6 +186,8 @@ export async function handleSearchTools(
     results: resultsWithActiveState,
     nextActions: searchNextActions,
     hint: baseHint + refinementHint,
+    // JSON.stringify drops it when undefined: no notice unless a model download starts.
+    notice: modelNotice,
     autoActivated:
       autoActivate && results.some((r) => !r.isActive && postActivationActiveNames.has(r.name)),
   };

@@ -228,13 +228,11 @@ export const SEARCH_VECTOR_BM25_SKIP_THRESHOLD = float('SEARCH_VECTOR_BM25_SKIP_
 /**
  * Start catalog embedding work at construction time instead of on first vector search.
  *
- * Default true since 2026-10-24: with SEARCH_VECTOR_BM25_SKIP_THRESHOLD
- * disabled, vector scoring runs on every full-path query, so the lazy
- * first-query model download would land on user-visible latency instead of
- * background warmup. Prewarm keeps the one-time HF download off the query
- * path; failure degrades to lexical for SEARCH_VECTOR_RETRY_COOLDOWN_MS.
+ * Default false in this fork: nothing is fetched from a third party in the background at start. The model is
+ * downloaded once, on the first search that needs it, and that search's response carries a notice saying so
+ * (modelDownloadNotice). Set true to prewarm in the background instead.
  */
-export const SEARCH_VECTOR_PREWARM = bool('SEARCH_VECTOR_PREWARM', true);
+export const SEARCH_VECTOR_PREWARM = bool('SEARCH_VECTOR_PREWARM', false);
 
 /** Release the embedding worker after this idle window. Set to 0 to keep it resident. */
 export const SEARCH_VECTOR_WORKER_IDLE_MS = int(

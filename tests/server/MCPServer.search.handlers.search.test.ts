@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({
   engine: {
     search: vi.fn(),
+    vectorModelNotice: vi.fn(async () => undefined),
     getSearchQualityTracker: vi.fn(() => ({
       getEnhancementSuggestions: vi.fn(() => null),
     })),

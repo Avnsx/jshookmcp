@@ -1,4 +1,5 @@
 import type { Tool } from '@modelcontextprotocol/server';
+import { modelDownloadNotice } from './StaticEmbeddingModel';
 import { allTools, getToolDomain } from '@server/ToolCatalog';
 import type { ToolProfile } from '@server/ToolCatalog';
 import type { SearchConfig } from '@internal-types/config';
@@ -203,6 +204,7 @@ export class ToolSearchEngine {
   // ── Dense vector search (Phase 8) ──
   private readonly embeddingEngine: EmbeddingEngine | null;
   private readonly vectorModelId: string;
+  private modelNoticeGiven = false;
   private toolEmbeddings: Float32Array[] | null = null;
   /**
    * In-flight prewarm promise guard. Ensures at most one embedBatch runs at a
@@ -391,19 +393,23 @@ export class ToolSearchEngine {
   }
 
   /**
+   * The model-download notice for the first search that will fetch the vector-search model (once per engine), or
+   * undefined: vector search off, the model cached, or the notice already given.
+   */
+  public async vectorModelNotice(): Promise<string | undefined> {
+    if (!this.embeddingEngine || this.modelNoticeGiven) return undefined;
+    const notice = await modelDownloadNotice(this.vectorModelId);
+    if (notice) this.modelNoticeGiven = true;
+    return notice;
+  }
+
+  /**
    * Update search strategy flags dynamically (e.g. for ablation benchmarks).
    * Automatically clears cached queries to avoid stale cross-strategy results.
    */
   public setStrategyFlags(flags: Partial<SearchStrategyFlags>): void {
     this.strategyFlags = { ...this.strategyFlags, ...flags };
     this.queryCache.clear();
-  }
-
-  /**
-   * Get current search strategy flags.
-   */
-  public getStrategyFlags(): Readonly<Required<SearchStrategyFlags>> {
-    return this.strategyFlags;
   }
 
   /**

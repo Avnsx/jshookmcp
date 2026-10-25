@@ -146,7 +146,7 @@ export function parseStaticEmbeddingTensor(bytes: Uint8Array): StaticEmbeddingTe
   return { dtype, rows, dimensions, values };
 }
 
-function getModelCacheDirectory(modelId: string): string {
+export function modelCacheDirectory(modelId: string): string {
   const overridden = readEnvNullableString('JSHOOK_EMBEDDING_MODEL_CACHE_DIR', { trim: true });
   const root = overridden
     ? resolve(overridden)
@@ -165,11 +165,12 @@ async function fileExists(path: string): Promise<boolean> {
   }
 }
 
+function modelEndpoint(): string {
+  return readEnvString('HF_ENDPOINT', 'https://huggingface.co', { trim: true });
+}
+
 function getModelUrl(modelId: string, filename: ModelFilename): string {
-  const endpoint = readEnvString('HF_ENDPOINT', 'https://huggingface.co', { trim: true }).replace(
-    /\/$/,
-    '',
-  );
+  const endpoint = modelEndpoint().replace(/\/$/, '');
   const encodedModelId = modelId
     .split('/')
     .map((segment) => encodeURIComponent(segment))
@@ -207,8 +208,28 @@ async function downloadModelFile(modelId: string, filename: ModelFilename, path:
   }
 }
 
+/**
+ * What a search that needs the model is about to download, when it is not cached: the model, its source, where it is
+ * stored, and how to skip it. Undefined once both files are cached.
+ */
+export async function modelDownloadNotice(modelId: string): Promise<string | undefined> {
+  const dir = modelCacheDirectory(modelId);
+  const cached = await Promise.all(
+    (['tokenizer.json', 'model.safetensors'] as const).map((file) =>
+      fileExists(resolve(dir, file)),
+    ),
+  );
+  if (cached.every(Boolean)) return undefined;
+  return (
+    `Vector search ranks search_tools results with the embedding model ${modelId}. It is not cached yet, so this ` +
+    `search starts a one-time download of tokenizer.json and model.safetensors from ${modelEndpoint()} into ${dir}; ` +
+    'results use lexical ranking until it is ready. The model is a recommended, optional technical requirement: ' +
+    'set SEARCH_VECTOR_ENABLED=false to skip it.'
+  );
+}
+
 async function ensureModelFile(modelId: string, filename: ModelFilename): Promise<string> {
-  const path = resolve(getModelCacheDirectory(modelId), filename);
+  const path = resolve(modelCacheDirectory(modelId), filename);
   if (!(await fileExists(path))) await downloadModelFile(modelId, filename, path);
   return path;
 }
@@ -238,10 +259,6 @@ export class StaticEmbeddingModel {
     ]);
     const tokenizer = new Tokenizer(JSON.parse(tokenizerJson) as object, {});
     return StaticEmbeddingModel.fromArtifacts(tokenizer, safetensors);
-  }
-
-  get dimensions(): number {
-    return this.tensor.dimensions;
   }
 
   embed(text: string): Float32Array {
