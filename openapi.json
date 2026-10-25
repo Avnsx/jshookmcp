@@ -4984,6 +4984,13 @@
             "default": false,
             "description": "Return summary instead of full payload",
             "type": "boolean"
+          },
+          "timeoutMs": {
+            "default": 30000,
+            "description": "Cooperative search execution deadline in milliseconds",
+            "maximum": 300000,
+            "minimum": 1,
+            "type": "number"
           }
         },
         "required": ["keyword"],
