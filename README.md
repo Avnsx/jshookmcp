@@ -62,18 +62,6 @@ English · [中文](./README.zh.md)
   <a href="https://vmoranv.github.io/jshookmcp/reference/">Tool Reference</a>
 </p>
 
-<p align="center">
-  <a href="https://www.swiftproxy.net/?code=R6KSMPQZ5">
-    <img src="docs/public/swiftproxy_sponsor.png" alt="Sponsored by Swiftproxy" width="640" />
-  </a>
-</p>
-
-<p align="center">
-  <a href="https://www.swiftproxy.net/?code=R6KSMPQZ5">
-    <b>Sponsored by Swiftproxy</b>
-  </a> — Premium Residential Proxies for Web Automation · 10% off code: <code>PROXY90</code>
-</p>
-
 ---
 
 </div>

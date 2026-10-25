@@ -60,18 +60,6 @@
   <a href="https://vmoranv.github.io/jshookmcp/reference/">工具参考</a>
 </p>
 
-<p align="center">
-  <a href="https://www.swiftproxy.net/?code=R6KSMPQZ5">
-    <img src="docs/public/swiftproxy_sponsor.png" alt="赞助商 Swiftproxy" width="640" />
-  </a>
-</p>
-
-<p align="center">
-  <a href="https://www.swiftproxy.net/?code=R6KSMPQZ5">
-    <b>赞助商：Swiftproxy</b>
-  </a> — 高质量纯净住宅 IP 提供商 · 九折码：<code>PROXY90</code>
-</p>
-
 ---
 
 </div>
