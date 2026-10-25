@@ -70,15 +70,23 @@ describe('GhidraAnalyzer — decompileFunction headless backend', () => {
   }
 
   it('invokes analyzeHeadless with -import and -postScript', async () => {
-    mockOutput('FUNCTION_NOT_FOUND:x');
-    const binaryPath = await writeTempBinary();
+    // POSIX semantics: analyzeHeadless (no extension) must be exec'd directly. Pin linux so
+    // toExecFileCommand does not wrap the mocked path into a cmd.exe line on Windows hosts.
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'linux' });
+    try {
+      mockOutput('FUNCTION_NOT_FOUND:x');
+      const binaryPath = await writeTempBinary();
 
-    await analyzer.decompileFunction(binaryPath, 'main');
+      await analyzer.decompileFunction(binaryPath, 'main');
 
-    const callArgs = execFile.mock.calls.at(-1)?.[1] as string[];
-    expect(callArgs).toContain('-import');
-    expect(callArgs).toContain('-postScript');
-    expect(callArgs).toContain('BinaryInstrumentDecompileOne.java');
+      const callArgs = execFile.mock.calls.at(-1)?.[1] as string[];
+      expect(callArgs).toContain('-import');
+      expect(callArgs).toContain('-postScript');
+      expect(callArgs).toContain('BinaryInstrumentDecompileOne.java');
+    } finally {
+      Object.defineProperty(process, 'platform', { value: originalPlatform });
+    }
   });
 
   it('escapes quotes, backslashes and newlines in the function name (injection guard)', () => {
