@@ -454,11 +454,7 @@ export async function closeServer(ctx: MCPServerContext): Promise<void> {
     const getInst =
       typeof ctx.getDomainInstance === 'function' ? ctx.getDomainInstance.bind(ctx) : null;
 
-    // Flush the OTLP instrumentation (if any) before the process unwinds:
-    // stdio deployments are one short-lived process per client session, so
-    // spans still sitting in the batch queue would be lost without this
-    // forced push. Bounded inside OtlpInstrumentation; failures are swallowed
-    // there — a dead collector must not stall shutdown.
+    // Shut the in-process instrumentation down before the process unwinds.
     const instrumentation =
       getInst?.<import('./observability/InstrumentationContract').InstrumentationContract>(
         'instrumentation',

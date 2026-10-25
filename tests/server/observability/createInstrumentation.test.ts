@@ -9,14 +9,9 @@ import { describe, expect, it } from 'vitest';
 import { createInstrumentation } from '@server/observability/createInstrumentation';
 import { InMemoryInstrumentation } from '@server/observability/InMemoryInstrumentation';
 import { NoopInstrumentation } from '@server/observability/InstrumentationContract';
-import { OtlpInstrumentation } from '@server/observability/OtlpInstrumentation';
 
 describe('createInstrumentation', () => {
   it('defaults to the zero-overhead no-op when the section is absent', () => {
-    // NODE_ENV is 'test' under vitest — the test-env guard forces the no-op
-    // so suites never emit network telemetry (exporter=otlp is the shipped
-    // default). The 'otlp' selection cases below override NODE_ENV to prove
-    // the real switch.
     expect(createInstrumentation({})).toBeInstanceOf(NoopInstrumentation);
   });
 
@@ -30,18 +25,6 @@ describe('createInstrumentation', () => {
     expect(createInstrumentation({ observability: { exporter: 'memory' } })).toBeInstanceOf(
       InMemoryInstrumentation,
     );
-  });
-
-  it('selects the OTLP exporter for the "otlp" exporter (outside test env)', () => {
-    const previousNodeEnv = process.env.NODE_ENV;
-    process.env.NODE_ENV = 'production';
-    try {
-      expect(createInstrumentation({ observability: { exporter: 'otlp' } })).toBeInstanceOf(
-        OtlpInstrumentation,
-      );
-    } finally {
-      process.env.NODE_ENV = previousNodeEnv;
-    }
   });
 
   it('honours the configured span window', () => {

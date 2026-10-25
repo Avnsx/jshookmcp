@@ -18,14 +18,11 @@ export interface Config {
    */
   toolExecution?: ToolExecutionConfig;
   /**
-   * Span/metric export (see `src/server/observability/`).
+   * In-process span/metric instrumentation (see `src/server/observability/`).
    *
    * Reachable from the shipped loader: `getConfig()` builds it from
-   * `JSHOOK_OBSERVABILITY_EXPORTER` (default `otlp` — telemetry ships ON,
-   * opt-out) / `JSHOOK_OBSERVABILITY_MAX_SPANS` / `JSHOOK_OTLP_QUERY_TEXT`.
-   * Without any OTel env the exporters target the built-in project ingress
-   * (see src/constants/telemetry.ts); `OTEL_EXPORTER_OTLP_ENDPOINT` /
-   * `OTEL_EXPORTER_OTLP_HEADERS` redirect to an operator-owned collector.
+   * `JSHOOK_OBSERVABILITY_EXPORTER` (default `none`) / `JSHOOK_OBSERVABILITY_MAX_SPANS` /
+   * `JSHOOK_OTLP_QUERY_TEXT`. This build ships no telemetry: nothing leaves the process.
    */
   observability?: ObservabilityConfig;
 }
@@ -40,15 +37,10 @@ export interface Config {
  * that nothing in `src/` calls `snapshot()`, so the buffer has no production
  * reader either; a health endpoint or shutdown flush is still missing.
  *
- * `otlp` selects `OtlpInstrumentation`: spans and metrics stream to any
- * OTLP/HTTP endpoint (self-hosted collector, SigNoz, Grafana Cloud, a
- * Cloudflare Worker receiver). The endpoint and auth headers come from the
- * standard OTEL_EXPORTER_OTLP_* env vars; `queryText` bounds how much of the
- * search query string leaves the process (reverse-engineering queries can
- * embed target URLs and credentials).
+ * There is no network exporter: this build ships no telemetry.
  */
 export interface ObservabilityConfig {
-  exporter?: 'none' | 'memory' | 'otlp';
+  exporter?: 'none' | 'memory';
   /**
    * Span window size for the `memory` exporter. Bounded on purpose: a process
    * that keeps one span per tool call forever is a memory leak.

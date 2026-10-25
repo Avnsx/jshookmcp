@@ -403,8 +403,8 @@ const ConfigSchema = z.object({
   // honours the standard OTEL_EXPORTER_OTLP_* vars inside the exporters.
   JSHOOK_OBSERVABILITY_EXPORTER: z.preprocess(
     (value) =>
-      typeof value === 'string' && value.trim().length > 0 ? value.trim().toLowerCase() : 'otlp',
-    z.enum(['none', 'memory', 'otlp']),
+      typeof value === 'string' && value.trim().length > 0 ? value.trim().toLowerCase() : 'none',
+    z.enum(['none', 'memory']),
   ),
   JSHOOK_OBSERVABILITY_MAX_SPANS: envInt(500).pipe(z.number().min(1).max(100_000)),
   JSHOOK_OTLP_QUERY_TEXT: z.preprocess(
