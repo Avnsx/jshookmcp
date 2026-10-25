@@ -41,7 +41,7 @@ jobs:
 
           # PR 描述里的代码引用（backtick 标识符）不是滥用信号，
           # 认真写的 PR 反而会多引；上限放开以覆盖 action 默认值 5。
-          max-code-references: 100
+          max-code-references: 40
 
           # 异常新增注释量：AI slop 常用海量注释撑体积。
           max-added-comments: 500
@@ -105,7 +105,7 @@ jobs:
           require-description: true
           max-description-length: 4000
           # 代码引用上限实质放开（anti-slop 无禁用开关，缺省会回落到默认 5 误伤认真写的 PR）。
-          max-code-references: 100
+          max-code-references: 40
 
           require-pr-template: true
           strict-pr-template-sections: 'Checklist'
