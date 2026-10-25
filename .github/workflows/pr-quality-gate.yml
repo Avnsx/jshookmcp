@@ -62,12 +62,13 @@ jobs:
             .oxlintrc.json
             .oxfmtrc.json
 
-          # fork 频次：批量 fork 是 spam 强信号。账号年龄/资料完整度
-          # 属于「可疑号画像」而非「行为恶意」，只放软信号层。注意
-          # anti-slop 内置默认也会启用这两项（age 30 / completeness 4），
-          # 不显式覆盖就会回落默认继续硬关 PR（PR #198 教训）。
+          # fork 频次：批量 fork 是 spam 强信号。账号年龄/资料完整度/
+          # 用户名模式都属于「可疑号画像」而非「行为恶意」，只放软信号层。
+          # 注意 anti-slop 内置默认会启用其中多项（age 30 / completeness 4 /
+          # spam-username 模式），不显式覆盖就会回落默认继续硬关 PR
+          # （PR #168 / #198 教训：heiqishi666 / knight-bili 7 年老号被误杀）。
           max-daily-forks: 6
-          detect-spam-usernames: true
+          detect-spam-usernames: false
           require-public-profile: true
           min-account-age: 0
           min-profile-completeness: 0
@@ -123,6 +124,7 @@ jobs:
           # 账号信任类：作为软信号，只提醒不关闭。
           min-account-age: 30
           min-profile-completeness: 4
+          detect-spam-usernames: true
           min-global-merge-ratio: 25
           global-merge-ratio-exclude-own: true
 
