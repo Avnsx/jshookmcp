@@ -63,11 +63,14 @@ jobs:
             .oxfmtrc.json
 
           # fork 频次：批量 fork 是 spam 强信号。账号年龄/资料完整度
-          # 属于「可疑号画像」而非「行为恶意」，放软信号层，避免误杀
-          # 刚注册就提小 bugfix 的真人贡献者（PR #198 / #203 教训）。
+          # 属于「可疑号画像」而非「行为恶意」，只放软信号层。注意
+          # anti-slop 内置默认也会启用这两项（age 30 / completeness 4），
+          # 不显式覆盖就会回落默认继续硬关 PR（PR #198 教训）。
           max-daily-forks: 6
           detect-spam-usernames: true
           require-public-profile: true
+          min-account-age: 0
+          min-profile-completeness: 0
 
           exempt-draft-prs: true
 
