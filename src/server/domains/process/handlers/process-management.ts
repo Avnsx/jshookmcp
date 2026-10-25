@@ -8,6 +8,7 @@
 import { logger } from '@utils/logger';
 import { argNumber, argStringArray } from '@server/domains/shared/parse-args';
 import { DEFAULT_DEBUG_PORT } from '@src/constants/server';
+import { isChromiumLikeExecutable } from '@modules/process/chromium-launch';
 import type { MemoryManager } from '@server/domains/shared/modules/native';
 import type { AuditEntry, MemoryOperationHost, ProcessHandlerDeps } from './shared-types';
 import {
@@ -459,6 +460,8 @@ export class ProcessManagementHandlers implements MemoryOperationHost {
         };
       }
 
+      const debugPortSupported = isChromiumLikeExecutable(executablePath);
+
       return {
         content: [
           {
@@ -472,7 +475,10 @@ export class ProcessManagementHandlers implements MemoryOperationHost {
                   path: process.executablePath,
                 },
                 debugPort,
-                attachUrl: `http://localhost:${debugPort}`,
+                debugPortSupported,
+                // Only advertise an attach endpoint when the launch actually
+                // enabled a debug port (Chromium-family targets only).
+                attachUrl: debugPortSupported ? `http://localhost:${debugPort}` : null,
               },
               null,
               2,
