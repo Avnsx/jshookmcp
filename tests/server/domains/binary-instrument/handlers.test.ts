@@ -659,6 +659,120 @@ describe('BinaryInstrumentHandlers', () => {
       expect(text).toContain('not installed');
     });
 
+    it('handleJadxDecompileApk runs jadx.bat through an escaped cmd.exe line on Windows', async () => {
+      const originalPlatform = process.platform;
+      Object.defineProperty(process, 'platform', { value: 'win32' });
+      try {
+        vi.mocked(probeCommand).mockResolvedValueOnce({
+          available: true,
+          path: 'C:\\tools\\jadx\\bin\\jadx.bat',
+        } as Awaited<ReturnType<typeof probeCommand>>);
+        vi.mocked(childProcess.execFile).mockImplementation(((
+          _file: string,
+          _args: readonly string[] | null | undefined,
+          _opts: unknown,
+          cb?: ((error: Error | null, stdout: string, stderr: string) => void) | null,
+        ) => {
+          // Real execFile calls back asynchronously; runJadx relies on that.
+          setImmediate(() => cb?.(null, '', ''));
+          return {} as never;
+        }) as unknown as typeof childProcess.execFile);
+
+        const handlers = createHandlers();
+        const result = await handlers.handleJadxDecompileApk({
+          apkPath: 'C:\\apks\\sample app.apk',
+          outputDir: 'C:\\out',
+          threadsCount: 2,
+        });
+
+        const body = JSON.parse((result as { content: Array<{ text: string }> }).content[0]!.text);
+        expect(body.error).toBeUndefined();
+        expect(childProcess.execFile).toHaveBeenCalledWith(
+          process.env.ComSpec || 'cmd.exe',
+          [
+            '/d',
+            '/s',
+            '/c',
+            '"C:\\tools\\jadx\\bin\\jadx.bat ^"--no-debug-info^" ^"-j^" ^"2^" ' +
+              '^"-d^" ^"C:\\out^" ^"C:\\apks\\sample^ app.apk^""',
+          ],
+          expect.objectContaining({ windowsVerbatimArguments: true, windowsHide: true }),
+          expect.any(Function),
+        );
+      } finally {
+        Object.defineProperty(process, 'platform', { value: originalPlatform });
+      }
+    });
+
+    // A hung batch-file tool: the cmd.exe child never exits; taskkill must run before child.kill.
+    function mockHungBatchTool(events: string[]): void {
+      vi.mocked(childProcess.execFile).mockImplementation(((
+        file: string,
+        args: readonly string[] | null | undefined,
+        _opts: unknown,
+        cb?: ((error: Error | null, stdout: string, stderr: string) => void) | null,
+      ) => {
+        if (file === 'taskkill') {
+          events.push(`taskkill ${(args ?? []).join(' ')}`);
+          setImmediate(() => cb?.(null, '', ''));
+          return {} as never;
+        }
+        return { pid: 4242, kill: (signal: string) => events.push(`kill ${signal}`) } as never;
+      }) as unknown as typeof childProcess.execFile);
+    }
+
+    it('handleJadxDecompileApk timeout on Windows kills the jadx.bat process tree', async () => {
+      const originalPlatform = process.platform;
+      Object.defineProperty(process, 'platform', { value: 'win32' });
+      try {
+        vi.mocked(probeCommand).mockResolvedValueOnce({
+          available: true,
+          path: 'C:\\tools\\jadx\\bin\\jadx.bat',
+        } as Awaited<ReturnType<typeof probeCommand>>);
+        const events: string[] = [];
+        mockHungBatchTool(events);
+
+        const result = await createHandlers().handleJadxDecompileApk({
+          apkPath: 'C:\\apks\\sample.apk',
+          outputDir: 'C:\\out',
+          timeoutMs: 20,
+        });
+        await new Promise((resolve) => setImmediate(resolve));
+
+        const body = JSON.parse((result as { content: Array<{ text: string }> }).content[0]!.text);
+        expect(body.error).toBe('JADX timed out after 20ms');
+        expect(events).toEqual(['taskkill /F /T /PID 4242', 'kill SIGKILL']);
+      } finally {
+        Object.defineProperty(process, 'platform', { value: originalPlatform });
+      }
+    });
+
+    it('handleApktoolDecode timeout on Windows kills the apktool.bat process tree', async () => {
+      const originalPlatform = process.platform;
+      Object.defineProperty(process, 'platform', { value: 'win32' });
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        vi.mocked(probeCommand).mockResolvedValueOnce({
+          available: true,
+          path: 'C:\\tools\\apktool\\apktool.bat',
+        } as Awaited<ReturnType<typeof probeCommand>>);
+        const events: string[] = [];
+        mockHungBatchTool(events);
+
+        const pending = createHandlers().handleApktoolDecode({ apkPath: 'C:\\apks\\sample.apk' });
+        await vi.advanceTimersByTimeAsync(120_000);
+        const result = await pending;
+        await new Promise((resolve) => setImmediate(resolve));
+
+        const body = JSON.parse((result as { content: Array<{ text: string }> }).content[0]!.text);
+        expect(body.error).toBe('C:\\tools\\apktool\\apktool.bat timed out after 120000ms');
+        expect(events).toEqual(['taskkill /F /T /PID 4242', 'kill SIGKILL']);
+      } finally {
+        vi.useRealTimers();
+        Object.defineProperty(process, 'platform', { value: originalPlatform });
+      }
+    });
+
     it('handleApktoolDecode reports unavailable when apktool is missing', async () => {
       vi.mocked(probeCommand).mockResolvedValueOnce({
         available: false,
