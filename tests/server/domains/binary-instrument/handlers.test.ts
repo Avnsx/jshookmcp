@@ -704,6 +704,62 @@ describe('BinaryInstrumentHandlers', () => {
       }
     });
 
+    describe('handleJadxDecompileApk addDebugLines', () => {
+      function mockJadxRuns(): string[][] {
+        const runs: string[][] = [];
+        vi.mocked(probeCommand).mockResolvedValue({
+          available: true,
+          path: '/opt/jadx/bin/jadx',
+        } as Awaited<ReturnType<typeof probeCommand>>);
+        vi.mocked(childProcess.execFile).mockImplementation(((
+          _file: string,
+          args: readonly string[] | null | undefined,
+          _opts: unknown,
+          cb?: ((error: Error | null, stdout: string, stderr: string) => void) | null,
+        ) => {
+          runs.push([...(args ?? [])]);
+          setImmediate(() => cb?.(null, '', ''));
+          return {} as never;
+        }) as unknown as typeof childProcess.execFile);
+        return runs;
+      }
+
+      it('passes --add-debug-lines and keeps the debug info jadx needs for it', async () => {
+        const runs = mockJadxRuns();
+        await createHandlers().handleJadxDecompileApk({
+          apkPath: '/apks/sample.apk',
+          outputDir: '/out',
+          threadsCount: 2,
+          addDebugLines: true,
+        });
+        expect(runs).toEqual([['--add-debug-lines', '-j', '2', '-d', '/out', '/apks/sample.apk']]);
+      });
+
+      it('leaves the jadx arguments unchanged without addDebugLines or with false', async () => {
+        const runs = mockJadxRuns();
+        const handlers = createHandlers();
+        const base = { apkPath: '/apks/sample.apk', outputDir: '/out', threadsCount: 2 };
+        await handlers.handleJadxDecompileApk(base);
+        await handlers.handleJadxDecompileApk({ ...base, addDebugLines: false });
+        const today = ['--no-debug-info', '-j', '2', '-d', '/out', '/apks/sample.apk'];
+        expect(runs).toEqual([today, today]);
+      });
+
+      it('decompiles again when the same outputDir is requested with the other addDebugLines value', async () => {
+        const runs = mockJadxRuns();
+        const handlers = createHandlers();
+        const base = { apkPath: '/apks/sample.apk', outputDir: '/out', threadsCount: 2 };
+        await handlers.handleJadxDecompileApk(base);
+        await handlers.handleJadxDecompileApk({ ...base, addDebugLines: true });
+        await handlers.handleJadxDecompileApk(base);
+        expect(runs.map((args) => args[0])).toEqual([
+          '--no-debug-info',
+          '--add-debug-lines',
+          '--no-debug-info',
+        ]);
+      });
+    });
+
     // A hung batch-file tool: the cmd.exe child never exits; taskkill must run before child.kill.
     function mockHungBatchTool(events: string[]): void {
       vi.mocked(childProcess.execFile).mockImplementation(((

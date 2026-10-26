@@ -1470,6 +1470,11 @@
       },
       "binary_instrument_jadx_decompile_apk": {
         "properties": {
+          "addDebugLines": {
+            "default": false,
+            "description": "add comments with the bytecode's debug line numbers, when present",
+            "type": "boolean"
+          },
           "apkPath": {
             "description": "Path to the APK, DEX, or CDEX file",
             "type": "string"

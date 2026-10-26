@@ -68,4 +68,14 @@ describe('binary-instrument tool definitions', () => {
     expect(getTool('apk_static_triage').inputSchema.required ?? []).toContain('apkPath');
     expect(getTool('jadx_decompile_apk').inputSchema.required ?? []).toContain('apkPath');
   });
+
+  it('jadx_decompile_apk offers an optional addDebugLines boolean defaulting to false', async () => {
+    const property = getToolProperty('jadx_decompile_apk', 'addDebugLines');
+    expect(property.type).toBe('boolean');
+    expect(property.default).toBe(false);
+    expect(property.description).toBe(
+      "add comments with the bytecode's debug line numbers, when present",
+    );
+    expect(getTool('jadx_decompile_apk').inputSchema.required ?? []).not.toContain('addDebugLines');
+  });
 });

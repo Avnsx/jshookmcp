@@ -283,6 +283,11 @@ export const binaryInstrumentTools: Tool[] = [
       .string('outputDir', 'Optional output directory. Defaults to a temp directory.')
       .boolean('noResources', 'Skip resources with --no-res.', { default: false })
       .boolean('force', 'Clear outputDir before decompilation if it exists.', { default: false })
+      .boolean(
+        'addDebugLines',
+        "add comments with the bytecode's debug line numbers, when present",
+        { default: false },
+      )
       .required('apkPath'),
   ),
   tool('apktool_decode', (t) =>

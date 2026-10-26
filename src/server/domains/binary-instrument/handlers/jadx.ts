@@ -127,6 +127,7 @@ export class JadxHandlers {
     const outputDir = readOptionalString(args, 'outputDir');
     const noResources = readOptionalBoolean(args, 'noResources') ?? false;
     const force = readOptionalBoolean(args, 'force') ?? false;
+    const addDebugLines = readOptionalBoolean(args, 'addDebugLines') ?? false;
 
     const jadxProbe = await probeCommand('jadx', ['--version']);
     if (!jadxProbe.available) {
@@ -150,7 +151,12 @@ export class JadxHandlers {
     const userTimeout = readOptionalNumber(args, 'timeoutMs');
     const timeoutMs = userTimeout ?? jadxConfig.decompileTimeoutMs;
     const threads = readOptionalNumber(args, 'threadsCount') ?? jadxConfig.threadsCount;
-    const jadxArgs = ['--no-debug-info', '-j', String(threads)];
+    // --no-debug-info drops the line numbers --add-debug-lines prints.
+    const jadxArgs = [
+      addDebugLines ? '--add-debug-lines' : '--no-debug-info',
+      '-j',
+      String(threads),
+    ];
     if (noResources) jadxArgs.push('--no-res');
     jadxArgs.push('-d', decompileDir, apkPath);
 
@@ -170,6 +176,7 @@ export class JadxHandlers {
         sourcesDir,
         resourcesDir: join(decompileDir, 'resources'),
         noResources,
+        addDebugLines,
         sampleFiles,
         next: 'Use jadx_search_code with decompileDir set to sourcesDir.',
       });

@@ -12118,6 +12118,11 @@ export const GENERATED_TOOL_CATALOG = [
             description: 'Clear outputDir before decompilation if it exists.',
             default: false,
           },
+          addDebugLines: {
+            type: 'boolean',
+            description: "add comments with the bytecode's debug line numbers, when present",
+            default: false,
+          },
         },
         required: ['apkPath'],
       },
