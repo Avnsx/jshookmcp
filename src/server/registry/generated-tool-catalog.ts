@@ -12120,7 +12120,8 @@ export const GENERATED_TOOL_CATALOG = [
           },
           addDebugLines: {
             type: 'boolean',
-            description: "add comments with the bytecode's debug line numbers, when present",
+            description:
+              "keep the bytecode's debug info (local variable names included) and add comments with its debug line numbers, when present",
             default: false,
           },
         },

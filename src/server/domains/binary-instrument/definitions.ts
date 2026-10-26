@@ -285,7 +285,7 @@ export const binaryInstrumentTools: Tool[] = [
       .boolean('force', 'Clear outputDir before decompilation if it exists.', { default: false })
       .boolean(
         'addDebugLines',
-        "add comments with the bytecode's debug line numbers, when present",
+        "keep the bytecode's debug info (local variable names included) and add comments with its debug line numbers, when present",
         { default: false },
       )
       .required('apkPath'),

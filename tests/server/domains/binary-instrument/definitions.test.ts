@@ -74,7 +74,7 @@ describe('binary-instrument tool definitions', () => {
     expect(property.type).toBe('boolean');
     expect(property.default).toBe(false);
     expect(property.description).toBe(
-      "add comments with the bytecode's debug line numbers, when present",
+      "keep the bytecode's debug info (local variable names included) and add comments with its debug line numbers, when present",
     );
     expect(getTool('jadx_decompile_apk').inputSchema.required ?? []).not.toContain('addDebugLines');
   });
