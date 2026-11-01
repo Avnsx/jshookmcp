@@ -662,6 +662,35 @@ describe('MCPServer', () => {
     expect(mcp.connect).toHaveBeenCalledOnce();
   });
 
+  it('loads plugins named in MCP_PLUGIN_ROOTS before the transport opens', async () => {
+    vi.stubEnv('MCP_PLUGIN_ROOTS', 'C:\\plugins\\dist');
+    try {
+      const server = new MCPServer(baseConfig);
+      const reload = vi
+        .spyOn(server, 'reloadExtensions')
+        .mockResolvedValue({ errors: [] } as never);
+      await server.start();
+      expect(reload).toHaveBeenCalledOnce();
+      expect(mocks.mcpInstances[0].connect.mock.invocationCallOrder[0]).toBeGreaterThan(
+        reload.mock.invocationCallOrder[0]!,
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('leaves plugin loading to reload_extensions when MCP_PLUGIN_ROOTS is unset', async () => {
+    vi.stubEnv('MCP_PLUGIN_ROOTS', '');
+    try {
+      const server = new MCPServer(baseConfig);
+      const reload = vi.spyOn(server, 'reloadExtensions');
+      await server.start();
+      expect(reload).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('wires the artifact retention scheduler in start() and stops it on close()', async () => {
     // Architecture hygiene (2026-08-18): the retention sweep must be started
     // explicitly by the server lifecycle, not by a module-level side effect.

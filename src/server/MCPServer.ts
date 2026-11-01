@@ -4,6 +4,7 @@ import type { Server } from 'node:http';
 import type { Socket } from 'node:net';
 import type { Config } from '@internal-types/index';
 import { logger } from '@utils/logger';
+import { readEnvNullableString } from '@src/config/environment';
 import { CacheManager } from '@utils/cache';
 import { TokenBudgetManager } from '@utils/TokenBudgetManager';
 import { UnifiedCacheManager } from '@utils/UnifiedCacheManager';
@@ -814,6 +815,12 @@ export class MCPServer implements MCPServerContext {
         payload.sessionId ?? undefined,
       );
     });
+    // Plugins named explicitly in MCP_PLUGIN_ROOTS load before the transport
+    // opens, so the client's first tools/list already carries their tools.
+    if (readEnvNullableString('MCP_PLUGIN_ROOTS')) {
+      const { errors } = await this.reloadExtensions();
+      for (const error of errors) logger.error(`[extensions] ${error}`);
+    }
     const transportMode = (this.config.server?.transport ?? MCP_TRANSPORT).toLowerCase();
     if (transportMode === 'http') {
       await startHttpTransport(this);
